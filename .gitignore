@@ -2,6 +2,8 @@
 /build/
 /.vs/
 /vcpkg_installed/
+__pycache__/
+*.pyc
 CMakeUserPresets.json
 *.nes
 *.NES

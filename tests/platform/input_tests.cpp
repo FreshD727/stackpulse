@@ -3,7 +3,9 @@
 #include <stdexcept>
 
 using namespace stackpulse::input;
-namespace { constexpr auto left = static_cast<std::size_t>(Action::left); }
+namespace {
+constexpr auto left = static_cast<std::size_t>(Action::left);
+}
 
 TEST_CASE("sample boundaries preserve rapid taps without generating tick actions", "[input]") {
     Adapter input;

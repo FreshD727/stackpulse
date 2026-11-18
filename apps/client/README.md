@@ -24,7 +24,7 @@ Every run records its complete initial state and one held-input mask per execute
 
 Choose **Play Last Replay** to validate the format, rule identity, CRC, checkpoints and final hash before playback. Practice fixtures restore their full initial board and timers. Playback ignores gameplay input, supports pause and restart from the recorded initial state, and reports completion with a final hash. It does not overwrite the recording. The seed HUD says RECORDED because the original user-facing seed is not stored separately from the full RNG state.
 
-The corrected spawn orientations use provisional rules/state version 2. Older recordings reject as incompatible; new recordings retain the SPCR v1 container and `.spcr` suffix.
+The corrected transitions, two-state I/S/Z geometry and charged DAS use provisional rules/state version 3. Older recordings reject as incompatible; new recordings retain the SPCR v1 container and `.spcr` suffix.
 
 `stackpulse_client --verify FILE` verifies and exits without initializing SDL, printing frames, final tick and hash; rejected files return status 1. `stackpulse_replay_verify FILE` is the standalone equivalent.
 

@@ -16,14 +16,14 @@ Test offsets left to right against the target orientation at old origin + offset
 
 | Transition | JLSTZ offsets | I offsets |
 | --- | --- | --- |
-| 0Ã¢â€ â€™R | (0,0) (-1,0) (-1,-1) (0,2) (-1,2) | (0,0) (-2,0) (1,0) (-2,1) (1,-2) |
-| RÃ¢â€ â€™0 | (0,0) (1,0) (1,1) (0,-2) (1,-2) | (0,0) (2,0) (-1,0) (2,-1) (-1,2) |
-| RÃ¢â€ â€™2 | (0,0) (1,0) (1,1) (0,-2) (1,-2) | (0,0) (-1,0) (2,0) (-1,-2) (2,1) |
-| 2Ã¢â€ â€™R | (0,0) (-1,0) (-1,-1) (0,2) (-1,2) | (0,0) (1,0) (-2,0) (1,2) (-2,-1) |
-| 2Ã¢â€ â€™L | (0,0) (1,0) (1,-1) (0,2) (1,2) | (0,0) (2,0) (-1,0) (2,-1) (-1,2) |
-| LÃ¢â€ â€™2 | (0,0) (-1,0) (-1,1) (0,-2) (-1,-2) | (0,0) (-2,0) (1,0) (-2,1) (1,-2) |
-| LÃ¢â€ â€™0 | (0,0) (-1,0) (-1,1) (0,-2) (-1,-2) | (0,0) (1,0) (-2,0) (1,2) (-2,-1) |
-| 0Ã¢â€ â€™L | (0,0) (1,0) (1,-1) (0,2) (1,2) | (0,0) (-1,0) (2,0) (-1,-2) (2,1) |
+| 0->R | (0,0) (-1,0) (-1,-1) (0,2) (-1,2) | (0,0) (-2,0) (1,0) (-2,1) (1,-2) |
+| R->0 | (0,0) (1,0) (1,1) (0,-2) (1,-2) | (0,0) (2,0) (-1,0) (2,-1) (-1,2) |
+| R->2 | (0,0) (1,0) (1,1) (0,-2) (1,-2) | (0,0) (-1,0) (2,0) (-1,-2) (2,1) |
+| 2->R | (0,0) (-1,0) (-1,-1) (0,2) (-1,2) | (0,0) (1,0) (-2,0) (1,2) (-2,-1) |
+| 2->L | (0,0) (1,0) (1,-1) (0,2) (1,2) | (0,0) (2,0) (-1,0) (2,-1) (-1,2) |
+| L->2 | (0,0) (-1,0) (-1,1) (0,-2) (-1,-2) | (0,0) (-2,0) (1,0) (-2,1) (1,-2) |
+| L->0 | (0,0) (-1,0) (-1,1) (0,-2) (-1,-2) | (0,0) (1,0) (-2,0) (1,2) (-2,-1) |
+| 0->L | (0,0) (1,0) (1,-1) (0,2) (1,2) | (0,0) (-1,0) (2,0) (-1,-2) (2,1) |
 
 Spin classification happens before merging cells. T only: last successful manipulation was rotation and >=3 occupied diagonal corners around world pivot origin+(1,1). Outside storage is occupied. Vertical movement preserves marker; successful lateral movement clears it. Failed actions preserve it. All qualifying spins are full; minis deferred. Rotation on empty board at origin(3,0) must succeed index0 for all pieces/transitions. T 0 at (3,18) CW on empty board: tests0,1 fail floor, index2 succeeds at (2,17). T R at (-1,0) CCW: index0 fails left wall, index1 succeeds at (0,0). Fill every board cell except active cells: a rotation with all candidate destinations blocked must fail with exact unchanged piece state.
 

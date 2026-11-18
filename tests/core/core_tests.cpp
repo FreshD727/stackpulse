@@ -1,6 +1,6 @@
-#include <stackpulse/core.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <stackpulse/core.hpp>
 using namespace stackpulse::diagnostic;
 
 TEST_CASE("xorshift seed contract and canonical little endian fields") {
@@ -25,7 +25,9 @@ TEST_CASE("diagnostic bounds ties and rejected input") {
         REQUIRE(step(state, {left | down, left | down, 0}).error == Error::none);
         REQUIRE(step(state, {0, 0, left | down}).error == Error::none);
     }
-    REQUIRE(state.x == 0); REQUIRE(state.y == 19); REQUIRE(state.presses == 200);
+    REQUIRE(state.x == 0);
+    REQUIRE(state.y == 19);
+    REQUIRE(state.presses == 200);
     REQUIRE_FALSE(step(state, {left | right, left | right, 0}).moved);
     const auto saved = state;
     REQUIRE(step(state, {16, 0, 0}).error == Error::invalid_input);
@@ -38,7 +40,8 @@ TEST_CASE("diagnostic bounds ties and rejected input") {
 TEST_CASE("state restoration preserves all deterministic evolution") {
     for (std::uint32_t seed = 1; seed <= 100; ++seed) {
         auto state = initial_state(seed);
-        for (unsigned i = 0; i < 1000; ++i) REQUIRE(step(state, {}).error == Error::none);
+        for (unsigned i = 0; i < 1000; ++i)
+            REQUIRE(step(state, {}).error == Error::none);
         auto restored = state;
         for (unsigned i = 0; i < 1000; ++i) {
             const auto held = i % 2 == 0 ? right : 0u;
@@ -54,5 +57,6 @@ TEST_CASE("unsigned counters wrap explicitly") {
     state.tick = std::numeric_limits<std::uint64_t>::max();
     state.presses = std::numeric_limits<std::uint64_t>::max();
     REQUIRE(step(state, {rotate, rotate, 0}).error == Error::none);
-    REQUIRE(state.tick == 0); REQUIRE(state.presses == 0);
+    REQUIRE(state.tick == 0);
+    REQUIRE(state.presses == 0);
 }

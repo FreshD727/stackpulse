@@ -6,23 +6,28 @@
 
 namespace stackpulse::input {
 bool Adapter::push(Transition event, bool repeat) {
-    if (repeat) return true;
-    if (event.action >= Action::count || (sampled_ && event.timestamp <= boundary_)) return false;
+    if (repeat)
+        return true;
+    if (event.action >= Action::count || (sampled_ && event.timestamp <= boundary_))
+        return false;
     pending_.push_back({event, Kind::transition});
     return true;
 }
 bool Adapter::release_device(Timestamp timestamp, Device device) {
-    if (sampled_ && timestamp <= boundary_) return false;
+    if (sampled_ && timestamp <= boundary_)
+        return false;
     pending_.push_back({{timestamp, device}, Kind::device_release});
     return true;
 }
 bool Adapter::release_all(Timestamp timestamp) {
-    if (sampled_ && timestamp <= boundary_) return false;
+    if (sampled_ && timestamp <= boundary_)
+        return false;
     pending_.push_back({{timestamp}, Kind::all_release});
     return true;
 }
 TickInput Adapter::sample(Timestamp boundary) {
-    if (sampled_ && boundary <= boundary_) throw std::invalid_argument("input boundaries must increase");
+    if (sampled_ && boundary <= boundary_)
+        throw std::invalid_argument("input boundaries must increase");
     TickInput result;
     result.boundary = boundary;
     std::stable_sort(pending_.begin(), pending_.end(), [](const auto& a, const auto& b) {
@@ -35,9 +40,15 @@ TickInput Adapter::sample(Timestamp boundary) {
             for (auto it = bindings_.begin(); it != bindings_.end();) {
                 if (end->kind == Kind::all_release || it->first.first == event.device) {
                     --references_[static_cast<std::size_t>(it->second)];
-                    result.transitions.push_back({event.timestamp, it->first.first, it->first.second, it->second, false, true});
+                    result.transitions.push_back({event.timestamp,
+                                                  it->first.first,
+                                                  it->first.second,
+                                                  it->second,
+                                                  false,
+                                                  true});
                     it = bindings_.erase(it);
-                } else ++it;
+                } else
+                    ++it;
             }
             continue;
         }
@@ -67,13 +78,18 @@ TickInput Adapter::sample(Timestamp boundary) {
     return result;
 }
 AxisHysteresis::AxisHysteresis(float engage, float release) : engage_(engage), release_(release) {
-    if (!(release >= 0 && release < engage && engage <= 1)) throw std::invalid_argument("invalid stick thresholds");
+    if (!(release >= 0 && release < engage && engage <= 1))
+        throw std::invalid_argument("invalid stick thresholds");
 }
 int AxisHysteresis::update(float value) {
-    if (!std::isfinite(value)) value = 0;
-    if (value >= engage_) direction_ = 1;
-    else if (value <= -engage_) direction_ = -1;
-    else if ((direction_ == 1 && value <= release_) || (direction_ == -1 && value >= -release_)) direction_ = 0;
+    if (!std::isfinite(value))
+        value = 0;
+    if (value >= engage_)
+        direction_ = 1;
+    else if (value <= -engage_)
+        direction_ = -1;
+    else if ((direction_ == 1 && value <= release_) || (direction_ == -1 && value >= -release_))
+        direction_ = 0;
     return direction_;
 }
 } // namespace stackpulse::input

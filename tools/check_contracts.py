@@ -23,6 +23,9 @@ for field, value in [("preset", "classic"), ("lock_ticks", 0), ("hold", False)]:
 for path in ROOT.rglob("*"):
     if not path.is_file() or any(part in {"out", ".git", "build"} for part in path.relative_to(ROOT).parts):
         continue
+    # Preserve the user report byte-for-byte, including its missing final newline.
+    if path.relative_to(ROOT).as_posix() == "docs/issues/issue-1-original.md":
+        continue
     if path.suffix in {".md", ".cpp", ".hpp", ".json", ".py", ".yml", ".txt"}:
         content = path.read_text(encoding="utf-8")
         assert "\t" not in content, f"tab: {path}"
