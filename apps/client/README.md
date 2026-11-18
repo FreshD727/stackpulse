@@ -2,7 +2,7 @@
 
 `stackpulse_client` provides local Classic Marathon, Practice Lab, keyboard/gamepad settings, and deterministic record/replay. This is an independently authored **Classic-inspired approximation**, not a reference-validated reproduction. The SDL-free mechanics and replay verifier use the same simulation as the client.
 
-Build with `cmake --build --preset windows-debug`. Run `out/build/windows-debug/Debug/stackpulse_client.exe` from this repository. The 640x360 logical canvas scales in integer steps with letterboxing. SDL bitmap debug text and original primitive artwork need no external font or asset files.
+Build with `cmake --build --preset windows-debug`. Run `out/build/windows-debug/Debug/stackpulse_client.exe` from this repository. The 640x360 logical canvas scales continuously to the largest viewport that fits the window, including when maximized. Letterboxing preserves its proportions on other aspect ratios. SDL bitmap debug text and original primitive artwork need no external font or asset files.
 
 ## Controls
 
@@ -10,11 +10,11 @@ Build with `cmake --build --preset windows-debug`. Run `out/build/windows-debug/
 - Gameplay defaults: Left/Right move, Down soft drops, X rotates clockwise, Z counterclockwise, Escape pauses. Controller D-pad moves, South rotates clockwise, West counterclockwise, Start pauses.
 - F1 pauses; F2 restarts the current seed; F3 starts the next seed; F6 saves the current replay.
 - Practice: F4 advances exactly one simulation tick and pauses; F5 loads an authored four-line clear fixture. Hold Down to clear it. The pause menu also exposes frame step and the fixture.
-- Settings: select a keyboard/controller action and press its replacement; conflicting and reserved shortcuts are rejected. Escape/Back cancels capture. Select start level to cycle 0–29. Left stick is optional, off by default, with 0.55 engagement / 0.35 release hysteresis.
+- Settings: select a keyboard/controller action and press its replacement; conflicting and reserved shortcuts are rejected. Escape/Back cancels capture. On the start-level row, Left/Right or controller D-pad Left/Right decreases/increases the level within 0–29. Enter/controller South also cycles through the levels. Left stick is optional, off by default, with 0.55 engagement / 0.35 release hysteresis.
 
 Hold, hard drop, ghost, kicks, and networking are absent in this ruleset. Repeated OS keydown events do not retrigger rotation or menus. Rotation uses sampled press edges; taps completed entirely between simulation boundaries are visible in the practice timeline but do not create an extra simulation action.
 
-T, J and L pieces spawn and preview flipped 180 degrees from their original provisional orientation. Successful horizontal shifts (including DAS), soft-drop cells and rotations play short, distinct original synthesized effects. Automatic gravity and blocked attempts stay silent; playback uses the same simulation events. Launch with `--mute` to disable audio for the session. Audio-device failure leaves gameplay available.
+T, J and L pieces spawn and preview flipped 180 degrees from their original provisional orientation. Successful horizontal shifts (including DAS), soft-drop cells and rotations play short, distinct original synthesized effects. One-to-three-line clears play a rising sweep; four-line clears play a longer four-note ascending cue. Automatic gravity and blocked attempts stay silent; playback uses the same simulation events. Launch with `--mute` to disable audio for the session. Audio-device failure leaves gameplay available.
 
 ## Persistence and replay
 

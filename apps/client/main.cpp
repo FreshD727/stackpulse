@@ -20,6 +20,7 @@ namespace {
 namespace game = stackpulse::classic;
 namespace in = stackpulse::input;
 namespace replay = stackpulse::replay;
+namespace client = stackpulse::client;
 constexpr in::Device keyboard = 1ULL << 63;
 constexpr std::array<const char*,6> names{"LEFT", "RIGHT", "SOFT DOWN", "ROTATE CW", "ROTATE CCW", "PAUSE"};
 constexpr std::array<in::Action,6> actions{in::Action::left,in::Action::right,in::Action::down,in::Action::clockwise,in::Action::counterclockwise,in::Action::pause};
@@ -84,7 +85,10 @@ int main(int argc,char** argv) {
     SDL_Window* window=nullptr; SDL_Renderer* renderer=nullptr;
     if (!SDL_CreateWindowAndRenderer("Stackpulse / Classic independent v1",1280,720,SDL_WINDOW_RESIZABLE,&window,&renderer)) { SDL_Quit(); return 1; }
     SDL_SetWindowMinimumSize(window,640,360);
-    SDL_SetRenderLogicalPresentation(renderer,640,360,SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+    if (!client::configure_presentation(renderer)) {
+        std::fprintf(stderr,"Logical presentation: %s\n",SDL_GetError());
+        SDL_DestroyRenderer(renderer); SDL_DestroyWindow(window); SDL_Quit(); return 1;
+    }
     SDL_SetRenderVSync(renderer,1);
     ClientAudio audio; audio.initialize(muted_audio);
     std::filesystem::path directory=".";
@@ -128,6 +132,11 @@ int main(int argc,char** argv) {
         return {};
     };
     auto save_settings=[&]() { notice=(smoke_frames>0 || settings.save(settings_path))?"SETTINGS SAVED":"SETTINGS SAVE FAILED"; };
+    auto adjust_level=[&](int code,bool pad) {
+        if (screen!=Screen::settings || settings_row!=13) return;
+        const auto next=client::adjusted_start_level(settings.start_level,client::level_direction(code,pad));
+        if (next!=settings.start_level) { settings.start_level=next; save_settings(); }
+    };
     auto remap=[&](int code,bool pad) {
         const bool wants_pad=capture>=6; if (pad!=wants_pad) return;
         auto& values=pad?settings.buttons:settings.keys; const auto slot=static_cast<std::size_t>(capture%6);
@@ -187,6 +196,7 @@ int main(int argc,char** argv) {
                     if (screen!=Screen::play) {
                         if (code==SDL_SCANCODE_UP || code==SDL_SCANCODE_W) navigate(-1);
                         else if (code==SDL_SCANCODE_DOWN || code==SDL_SCANCODE_S) navigate(1);
+                        else if (code==SDL_SCANCODE_LEFT || code==SDL_SCANCODE_RIGHT) adjust_level(code,false);
                         else if (code==SDL_SCANCODE_RETURN) confirm();
                         else if (practice && screen==Screen::pause && code==SDL_SCANCODE_F4) { screen=Screen::play; step_once=true; }
                         break;
@@ -210,6 +220,7 @@ int main(int argc,char** argv) {
                     if (screen!=Screen::play) {
                         if (code==SDL_GAMEPAD_BUTTON_DPAD_UP) navigate(-1);
                         else if (code==SDL_GAMEPAD_BUTTON_DPAD_DOWN) navigate(1);
+                        else if (code==SDL_GAMEPAD_BUTTON_DPAD_LEFT || code==SDL_GAMEPAD_BUTTON_DPAD_RIGHT) adjust_level(code,true);
                         else if (code==SDL_GAMEPAD_BUTTON_SOUTH) confirm();
                         break;
                     }
@@ -252,6 +263,7 @@ int main(int argc,char** argv) {
                     if (events.shifted) audio.play(ClientAudio::Cue::shift);
                     if (events.soft_dropped) audio.play(ClientAudio::Cue::soft_drop);
                     if (events.rotated) audio.play(ClientAudio::Cue::rotate);
+                    if (const auto cue=client::clear_cue(events.cleared)) audio.play(*cue);
                     if (!playback) { recording.inputs.push_back(mask); dirty=true; }
                     if (events.cleared) notice=number(events.cleared)+" LINES CLEARED";
                     if (state.game_over && !playback) { notice="GAME OVER / RESTART FROM PAUSE"; save_recording(); screen=Screen::pause; selection=1; }
@@ -286,7 +298,7 @@ int main(int argc,char** argv) {
             if (settings_row==12) rect(renderer,24,262,585,22,{26,61,65,255});
             text(renderer,30,269,std::string("OPTIONAL LEFT STICK: ")+(settings.sticks?"ON (.55/.35 HYSTERESIS)":"OFF"));
             if (settings_row==13) rect(renderer,24,290,585,22,{26,61,65,255});
-            text(renderer,30,297,"START LEVEL: "+number(settings.start_level)+" / ENTER TO CYCLE 0-29");
+            text(renderer,30,297,"START LEVEL: "+number(settings.start_level)+" / LEFT - RIGHT + / ENTER CYCLES");
             if (settings_row==14) rect(renderer,24,316,585,22,{26,61,65,255});
             text(renderer,30,323,"BACK / ESC OR PAD BACK");
         } else {

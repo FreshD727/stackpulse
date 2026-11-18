@@ -1,5 +1,6 @@
 #pragma once
 #include <SDL3/SDL.h>
+#include "client_logic.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -11,7 +12,7 @@
 // them while SDL holds that same lock during mix().
 class ClientAudio {
 public:
-    enum class Cue : std::size_t { shift, soft_drop, rotate };
+    using Cue = stackpulse::client::Cue;
     ClientAudio() = default;
     ClientAudio(const ClientAudio&) = delete;
     ClientAudio& operator=(const ClientAudio&) = delete;
@@ -22,12 +23,14 @@ public:
         make_tone(0, 960, 230.F, 150.F);
         make_tone(1, 768, 150.F, 95.F);
         make_tone(2, 2016, 540.F, 860.F);
+        make_tone(3, 7200, 420.F, 1050.F);
+        make_four_line_tone();
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) { unavailable(); return; }
         initialized_=true;
         const SDL_AudioSpec spec{SDL_AUDIO_F32,1,sample_rate};
         stream_=SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK,&spec,mix,this);
         if (!stream_) { unavailable(); shutdown(); return; }
-        std::printf("Audio: synthesized movement / soft drop / rotation\n");
+        std::printf("Audio: synthesized movement / soft drop / rotation / clear / four-line clear\n");
     }
 
     void set_playing(bool playing) {
@@ -61,9 +64,9 @@ public:
 
 private:
     static constexpr int sample_rate=48000;
-    struct Tone { std::array<float,2016> samples{}; std::size_t length{}; };
+    struct Tone { std::array<float,12480> samples{}; std::size_t length{}; };
     struct Voice { std::size_t tone{},position{}; bool active{}; };
-    std::array<Tone,3> tones_{};
+    std::array<Tone,5> tones_{};
     std::array<Voice,8> voices_{};
     std::size_t next_voice_{};
     SDL_AudioStream* stream_{};
@@ -79,6 +82,21 @@ private:
             const float release=1.F-progress;
             phase+=6.28318530718F*(from+(to-from)*progress)/static_cast<float>(sample_rate);
             tone.samples[i]=.045F*attack*release*release*(std::sin(phase)+.16F*std::sin(2.F*phase));
+        }
+    }
+
+    void make_four_line_tone() {
+        auto& tone=tones_[static_cast<std::size_t>(Cue::four_line_clear)];
+        tone.length=tone.samples.size();
+        constexpr std::array<float,4> notes{523.25F,659.25F,783.99F,1046.5F};
+        const auto note_length=tone.length/notes.size();
+        float phase=0.F;
+        for (std::size_t i=0;i<tone.length;++i) {
+            const auto note=i/note_length, position=i%note_length;
+            const float progress=static_cast<float>(position)/static_cast<float>(note_length-1);
+            const float attack=std::min(1.F,static_cast<float>(position)/96.F);
+            phase+=6.28318530718F*notes[note]/static_cast<float>(sample_rate);
+            tone.samples[i]=.06F*attack*(1.F-progress)*std::sin(phase);
         }
     }
 
