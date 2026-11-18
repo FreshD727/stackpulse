@@ -4,6 +4,8 @@
 
 Build with `cmake --build --preset windows-debug`. Run `out/build/windows-debug/Debug/stackpulse_client.exe` from this repository. The 640x360 logical canvas scales continuously to the largest viewport that fits the window, including when maximized. Letterboxing preserves its proportions on other aspect ratios. SDL bitmap debug text and original primitive artwork need no external font or asset files.
 
+Classic uses ten original retro color palettes, selected by the current level modulo ten. I/O/T share a light color, J/L share the first accent, and S/Z share the second. Locked blocks, the active piece and the next preview all use the current level palette, including selected start levels and replay playback. The whole board recolors immediately on level transitions. These colors are NES-inspired, independently authored, and need no ROM assets.
+
 ## Controls
 
 - Menus: Up/Down or W/S and Enter; controller D-pad and South. Escape or controller Back always backs out, cancels a remap, or toggles pause.

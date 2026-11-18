@@ -6,6 +6,51 @@
 
 namespace client = stackpulse::client;
 
+namespace {
+bool same_color(SDL_Color a, SDL_Color b) {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+}
+} // namespace
+
+TEST_CASE("Classic palettes cycle every ten levels with three piece groups", "[client][palette]") {
+    using Piece = stackpulse::classic::Piece;
+    constexpr std::array pieces{
+        Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
+    for (std::uint32_t level = 0; level < 30; ++level) {
+        CAPTURE(level);
+        const auto light = client::piece_color(Piece::I, level);
+        const auto first = client::piece_color(Piece::J, level);
+        const auto second = client::piece_color(Piece::S, level);
+        REQUIRE(same_color(light, client::piece_color(Piece::O, level)));
+        REQUIRE(same_color(light, client::piece_color(Piece::T, level)));
+        REQUIRE(same_color(first, client::piece_color(Piece::L, level)));
+        REQUIRE(same_color(second, client::piece_color(Piece::Z, level)));
+        REQUIRE_FALSE(same_color(light, first));
+        REQUIRE_FALSE(same_color(light, second));
+        REQUIRE_FALSE(same_color(first, second));
+        for (auto piece : pieces) {
+            const auto color = client::piece_color(piece, level);
+            REQUIRE(color.a == 255);
+            REQUIRE(same_color(color, client::piece_color(piece, level + 10)));
+            const auto highlight = client::block_highlight(color);
+            REQUIRE(highlight.r >= color.r);
+            REQUIRE(highlight.g >= color.g);
+            REQUIRE(highlight.b >= color.b);
+            REQUIRE(highlight.a == 255);
+        }
+    }
+    for (auto piece : pieces)
+        REQUIRE_FALSE(same_color(client::piece_color(piece, 0), client::piece_color(piece, 1)));
+    // All ten palettes differ, including the wrap from level nine to ten.
+    for (std::uint32_t a = 0; a < 10; ++a)
+        for (std::uint32_t b = a + 1; b < 10; ++b)
+            REQUIRE_FALSE(
+                same_color(client::piece_color(Piece::J, a), client::piece_color(Piece::J, b)));
+    REQUIRE_FALSE(same_color(client::piece_color(Piece::J, 9), client::piece_color(Piece::J, 10)));
+    const auto saturated = client::block_highlight({250, 225, 42, 255});
+    REQUIRE(same_color(saturated, SDL_Color{255, 255, 77, 255}));
+}
+
 TEST_CASE("line-clear events select a distinct four-line cue", "[client][audio]") {
     REQUIRE_FALSE(client::clear_cue(0));
     for (unsigned lines = 1; lines <= 3; ++lines)

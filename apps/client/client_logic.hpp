@@ -1,10 +1,47 @@
 #pragma once
 #include <SDL3/SDL.h>
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <stackpulse/classic.hpp>
 
 namespace stackpulse::client {
+// Original retro palettes: light pieces plus two accents, cycling every ten levels.
+constexpr SDL_Color piece_color(classic::Piece piece, std::uint32_t level) {
+    constexpr std::array<std::array<SDL_Color, 3>, 10> palettes{{
+        {{{76, 120, 224, 255}, {88, 204, 224, 255}, {208, 232, 252, 255}}},
+        {{{64, 160, 104, 255}, {160, 216, 88, 255}, {224, 244, 200, 255}}},
+        {{{148, 96, 204, 255}, {220, 132, 224, 255}, {244, 216, 252, 255}}},
+        {{{64, 156, 216, 255}, {112, 216, 152, 255}, {204, 244, 232, 255}}},
+        {{{200, 88, 148, 255}, {112, 132, 232, 255}, {252, 212, 232, 255}}},
+        {{{72, 176, 160, 255}, {156, 116, 224, 255}, {220, 228, 252, 255}}},
+        {{{208, 104, 72, 255}, {232, 188, 88, 255}, {252, 228, 200, 255}}},
+        {{{132, 104, 216, 255}, {104, 192, 224, 255}, {216, 220, 252, 255}}},
+        {{{184, 152, 64, 255}, {184, 216, 112, 255}, {244, 244, 200, 255}}},
+        {{{208, 88, 104, 255}, {232, 152, 88, 255}, {252, 216, 208, 255}}},
+    }};
+    const auto& palette = palettes[level % palettes.size()];
+    switch (piece) {
+    case classic::Piece::J:
+    case classic::Piece::L:
+        return palette[0];
+    case classic::Piece::S:
+    case classic::Piece::Z:
+        return palette[1];
+    default:
+        return palette[2];
+    }
+}
+
+constexpr SDL_Color block_highlight(SDL_Color color) {
+    return {static_cast<Uint8>(std::min(255, color.r + 35)),
+            static_cast<Uint8>(std::min(255, color.g + 35)),
+            static_cast<Uint8>(std::min(255, color.b + 35)),
+            255};
+}
+
 enum class Cue : std::size_t { shift, soft_drop, rotate, clear, four_line_clear };
 
 constexpr std::optional<Cue> clear_cue(unsigned lines) {

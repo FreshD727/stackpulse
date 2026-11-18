@@ -100,25 +100,11 @@ void text(SDL_Renderer* r, float x, float y, const std::string& value, SDL_Color
     color(r, c);
     SDL_RenderDebugText(r, x, y, value.c_str());
 }
-constexpr std::array<SDL_Color, 7> palette{{{75, 204, 226, 255},
-                                            {245, 204, 86, 255},
-                                            {185, 125, 239, 255},
-                                            {91, 211, 155, 255},
-                                            {240, 112, 126, 255},
-                                            {102, 150, 244, 255},
-                                            {245, 165, 86, 255}}};
-void block(SDL_Renderer* r, float x, float y, std::size_t piece, float size = 14) {
-    const auto c = palette[piece % 7];
+void block(
+    SDL_Renderer* r, float x, float y, game::Piece piece, std::uint32_t level, float size = 14) {
+    const auto c = client::piece_color(piece, level);
     rect(r, x + 1, y + 1, size - 2, size - 2, c);
-    rect(r,
-         x + 2,
-         y + 2,
-         size - 4,
-         2,
-         {static_cast<Uint8>(std::min(255, c.r + 35)),
-          static_cast<Uint8>(std::min(255, c.g + 35)),
-          static_cast<Uint8>(std::min(255, c.b + 35)),
-          255});
+    rect(r, x + 2, y + 2, size - 4, 2, client::block_highlight(c));
     rect(r, x + 3, y + size - 4, 2, 2, {35, 50, 69, 255});
 }
 std::string number(std::uint64_t value) {
@@ -787,7 +773,11 @@ int main(int argc, char** argv) {
                     rect(renderer, bx + x * cell, by + y * cell, 13, 13, {17, 29, 44, 255});
                     const auto value = state.board[static_cast<std::size_t>(y * 10 + x)];
                     if (value)
-                        block(renderer, bx + x * cell, by + y * cell, value - 1);
+                        block(renderer,
+                              bx + x * cell,
+                              by + y * cell,
+                              static_cast<game::Piece>(value - 1),
+                              state.level);
                 }
             if (!state.game_over && state.entry_timer == 0)
                 for (const auto cell_position : game::cells(state.active))
@@ -795,7 +785,8 @@ int main(int argc, char** argv) {
                         block(renderer,
                               bx + cell_position.x * cell,
                               by + cell_position.y * cell,
-                              static_cast<std::size_t>(state.active.piece));
+                              state.active.piece,
+                              state.level);
             text(renderer, 20, 68, playback ? "REPLAY" : practice ? "PRACTICE" : "MARATHON", mint);
             text(renderer, 20, 96, "SCORE", muted);
             text(renderer, 20, 111, number(state.score));
@@ -810,10 +801,7 @@ int main(int argc, char** argv) {
             text(renderer, 320, 66, "NEXT", mint);
             game::Active preview{state.next, game::spawn_rotation(state.next), 0, 0};
             for (auto c : game::cells(preview))
-                block(renderer,
-                      320 + c.x * 14.F,
-                      85 + c.y * 14.F,
-                      static_cast<std::size_t>(state.next));
+                block(renderer, 320 + c.x * 14.F, 85 + c.y * 14.F, state.next, state.level);
             if (screen == Screen::pause) {
                 text(renderer, 414, 65, state.game_over ? "GAME OVER" : "PAUSED", mint);
                 constexpr std::array<const char*, 7> menu{"RESUME",
