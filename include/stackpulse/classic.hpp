@@ -4,12 +4,15 @@
 #include <vector>
 
 namespace stackpulse::classic {
-inline constexpr std::uint32_t rules_version = 2;
+inline constexpr std::uint32_t rules_version = 3;
 inline constexpr std::uint32_t tick_numerator = 60, tick_denominator = 1;
 enum Action : std::uint32_t { left=1, right=2, down=4, clockwise=8, counterclockwise=16 };
 inline constexpr std::uint32_t action_mask=31;
 enum class Piece : std::uint8_t { I, O, T, S, Z, J, L };
-// Spawn and next preview share orientation; matrix geometry and rotation remain fixed.
+// Spawn and next preview share orientation. I/S/Z toggle between two states.
+[[nodiscard]] constexpr unsigned rotation_count(Piece piece) noexcept {
+    return piece==Piece::O ? 1u : (piece==Piece::I || piece==Piece::S || piece==Piece::Z ? 2u : 4u);
+}
 [[nodiscard]] constexpr std::uint8_t spawn_rotation(Piece piece) noexcept {
     return piece==Piece::T || piece==Piece::J || piece==Piece::L ? 2 : 0;
 }
@@ -33,6 +36,8 @@ struct Events { bool moved{}, shifted{}, soft_dropped{}, rotated{}, locked{}, sp
 [[nodiscard]] bool collides(const State&, const Active&) noexcept;
 // False for invalid masks/state; state remains unchanged. Inputs are held masks.
 bool step(State&, std::uint32_t held, Events* events=nullptr) noexcept;
+[[nodiscard]] std::uint32_t transition_lines(std::uint32_t start_level) noexcept;
+[[nodiscard]] std::uint32_t level_for_lines(std::uint32_t start_level, std::uint32_t lines) noexcept;
 [[nodiscard]] std::uint32_t gravity_frames(std::uint32_t level) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> canonical_bytes(const State&);
 bool decode_state(const std::vector<std::uint8_t>&, State&) noexcept;

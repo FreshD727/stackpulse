@@ -40,11 +40,11 @@ TEST_CASE("Classic replay rejects every truncated prefix corruption trailing and
  broken=bytes; broken[input_start]=32; reseal(broken); REQUIRE_FALSE(replay::decode(broken,out,error));
  broken=bytes; broken[broken.size()-5]^=1; reseal(broken); REQUIRE_FALSE(replay::decode(broken,out,error));
 }
-TEST_CASE("Classic replay rejects previous spawn rules with an explanatory identity error") {
+TEST_CASE("Classic replay rejects previous provisional rules with an explanatory identity error") {
  replay::Replay r{classic::initial_state(5),{0}}; std::string error; std::vector<std::uint8_t> bytes;
  REQUIRE(replay::encode(r,bytes,error));
  std::string previous(reinterpret_cast<const char*>(bytes.data()+24),u32(bytes,8));
- previous.replace(previous.find("v2;"),3,"v1;");
+ previous.replace(previous.find("v3;"),3,"v2;");
  const std::string spawn_rule="spawn-rotation=I0,O0,T2,S0,Z0,J2,L2;";
  previous.erase(previous.find(spawn_rule),spawn_rule.size());
  const auto old_length=u32(bytes,8);
@@ -53,7 +53,7 @@ TEST_CASE("Classic replay rejects previous spawn rules with an explanatory ident
  for(unsigned i=0;i<4;++i) bytes[8+i]=static_cast<std::uint8_t>(previous.size()>>(8*i));
  reseal(bytes); replay::Replay restored;
  REQUIRE_FALSE(replay::decode(bytes,restored,error)); REQUIRE(error=="unsupported rules identity");
- auto state=classic::canonical_bytes(r.initial); state[0]=1; classic::State out;
+ auto state=classic::canonical_bytes(r.initial); state[0]=2; classic::State out;
  REQUIRE_FALSE(classic::decode_state(state,out));
 }
 TEST_CASE("Classic replay checks intermediate checkpoints and invalid recording") {

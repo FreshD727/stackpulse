@@ -1,25 +1,25 @@
 # Classic reference contract
 
-Status: reference measurement plan, updated 2026-11-18. No fidelity approval or reference observations exist. M1 supplies a playable **Classic-inspired provisional ruleset**, not reference-accurate Classic. The unknowns below block fidelity approval; the provisional implementation is a separately identified design choice.
+Status: reference measurement plan, updated 2026-11-18. No fidelity approval or captured reference traces exist. Public research informs the issue-1 corrections below. M1 supplies a playable **Classic-inspired provisional ruleset**, not reference-accurate Classic. The unknowns below block fidelity approval; the provisional implementation is a separately identified design choice.
 
 ## Implemented provisional behavior
 
-`include/stackpulse/classic.hpp` and `src/core/classic.cpp` define provisional rules version 2. These values are authored behavior, not measurements or approved reference constants:
+`include/stackpulse/classic.hpp` and `src/core/classic.cpp` define provisional rules version 3. Remaining behavior is provisional; see the issue-1 research note below:
 
 | Mechanic | Implemented choice |
 | --- | --- |
 | Clock/board | Logical 60/1 ticks per second; 10x20 stored visible cells; active cells may occupy y=-4..-1 but no hidden board rows are stored |
-| Spawn/rotation | All pieces spawn at x=3,y=-1; T/J/L start at orientation 2 (180 degrees from the base matrix), I/O/S/Z at 0; next preview uses the same orientation; generic clockwise matrix rotation (I uses 4x4, others 3x3); O cells fixed; no kicks |
-| Horizontal | Immediate move on a direction change; first repeat after 16 further held ticks, then every 6 ticks; neutral/opposite directions reset charge; charge advances during entry delay |
+| Spawn/rotation | All pieces spawn at x=3,y=-1; T/J/L start at orientation 2 (180 degrees from the base matrix), I/O/S/Z at 0; next preview uses the same orientation; T/J/L rotate in a 3x3 matrix; I/S/Z have two states, their horizontal state is one row below the old base matrix; O cells fixed; no kicks |
+| Horizontal | Immediate move on a direction change; first repeat after 16 further held ticks, then every 6 ticks; neutral/opposite directions reset charge; blocked attempts fully charge DAS and retry each active tick; charge saturates during entry delay until a successful repeat |
 | Input order | Derive press edges and DAS; consume entry delay/spawn and return if delayed; rotate; horizontal move; gravity/lock. Opposite rotation press edges cancel. Rotation uses press edges, not held repeats |
 | Gravity | Frames per cell for levels 0..29: `48,43,38,33,28,23,18,13,8,6,5,5,5,4,4,4,3,3,3,2,2,2,2,2,2,2,2,2,2,1`; levels above 29 use 1 |
 | Lock/drop | A failed downward attempt locks immediately; soft drop uses min(2,gravity) ticks and gives one point per successful downward cell while down is held; no hard drop or hold |
 | Delays | Constant 10 ticks after an ordinary lock, 20 after a clear; no separate clear animation timer; spawning consumes the final delay tick |
 | Randomizer | Wall-clock-independent xorshift32 (13,17,5); zero seed becomes 1; reject output values 0..3, then modulo 7; independent draws permit repeats; no bag or reference retry algorithm |
-| Score/level | Clears award 40/100/300/1200 times pre-clear (level+1); start level clamps to 0..29; level=start_level+floor(total_lines/10); total lines saturates at UINT32_MAX, preserving resumable states at the counter boundary |
+| Score/level | Clears award 40/100/300/1200 times post-transition (level+1); start level clamps to 0..29; first transition uses `min(start*10+10,max(100,start*10-50))` lines, then every 10; total lines saturates at UINT32_MAX, preserving resumable states at the counter boundary |
 | Top-out | Any locked cell above visible row 0 ends play before clear processing; blocked spawn also ends play |
 
-State serialization includes board, active/next pieces, RNG, held inputs, DAS direction/timer, gravity/entry timers, tick, score, lines, levels and game-over flag. This is a distinct 268-byte gameplay codec; the M0 diagnostic codec remains separate. Version 2 flips the T/J/L spawn orientation as requested during playtesting; prior version 1 states and replays reject rather than silently playing under changed spawn rules. The authored Practice clear fixture and implementation tests establish consistency with these choices only. Replay identity embeds their provisional description (see [replay contract](replay-v1.md)). Reference-trace execution and human handling approval remain outstanding.
+State serialization includes board, active/next pieces, RNG, held inputs, DAS direction/timer, gravity/entry timers, tick, score, lines, levels and game-over flag. This is a distinct 268-byte gameplay codec; the M0 diagnostic codec remains separate. Version 3 changes transition/scoring, two-state geometry and charged blocked shifts; prior version 1/2 states and replays reject rather than silently playing under changed rules. The authored Practice clear fixture and implementation tests establish consistency with these choices only. Replay identity embeds their provisional description (see [replay contract](replay-v1.md)). Reference-trace execution and human handling approval remain outstanding.
 
 ## Target and provenance
 
@@ -29,7 +29,7 @@ Maintain a measurement ledger with observation ID, author, date, lawful referenc
 
 ## Behavior matrix
 
-Every row is currently UNKNOWN / UNAPPROVED:
+Every row still requires independent trace and handling approval:
 
 | Mechanic | Required observations / boundary cases |
 | --- | --- |
@@ -48,3 +48,9 @@ Every row is currently UNKNOWN / UNAPPROVED:
 Use independently authored UTF-8 JSON, `trace_version: 1`, `status: "proposed"` or `"approved"`, `observation_ids: [string]`, `target: {region, revision, clock_num, clock_den}`, `initial_state`, and `frames`. Each frame has `tick` (decimal integer string u64), `held` (u32 action mask), `expected_state` and `expected_events`. Once a Classic state codec exists, add its schema version and canonical state/hash bytes; do not call M0 cursor states Classic states. Unknown values are null, never guessed expectations. Approved fixtures require no nulls in relevant fields, independent provenance review, exact initial hidden/timer/RNG state, consecutive ticks and reviewer/date. Reject duplicate ticks, unknown action bits and missing expected outcomes. No approved trace is supplied in M0.
 
 Required suites: every matrix row, long holds through delays, wall/repress sequences, rapid tapping and same-frame transitions. Tick comparisons must include hidden state, not only the visible board. Human blind handling checks must separately cover DAS, hypertapping and rolling on actual supported devices. Synthetic sequences establish logical behavior only. Fidelity remains unclaimed until approved traces pass and human sign-off records remaining deviations.
+
+## Issue-1 research note
+
+[Michael Birken’s original Nintendo Tetris investigation](https://meatfighter.com/nintendotetrisai/), sections Representing Tetriminos, Shifting Tetriminos, Dropping Tetriminos, Slides and Spins, and Lines and Statistics, informed these corrections: I/S/Z use two orientations; blocked horizontal attempts charge DAS; failed scheduled descent locks; the first transition depends on the starting level and later transitions occur every ten lines; clear scoring follows transition. Level 15 first transitions at 100 lines.
+
+Our tests independently reconstruct the supplied Z/J tuck and exercise rotation, blocked shift, descent, retry and lock. They are synthetic regressions, not NES traces. Starts 20–29 extend the project’s formula beyond the source’s native start selection. Neutral reset, simultaneous/down inputs, tick rate, entry/clear delay, randomizer and unsupported original overflow quirks remain provisional. No modern resettable lock delay was added. The original user image supplies placement intent, not timing evidence.
