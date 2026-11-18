@@ -1,0 +1,46 @@
+name: foundation
+on: [push, pull_request]
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Linux SDL build prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libasound2-dev
+      - name: Configure Windows
+        if: runner.os == 'Windows'
+        run: cmake --preset windows-debug -G "Visual Studio 17 2022"
+      - name: Configure Linux
+        if: runner.os == 'Linux'
+        run: cmake --preset linux-debug
+      - name: Build Windows
+        if: runner.os == 'Windows'
+        run: cmake --build --preset windows-debug --parallel 4
+      - name: Build Linux
+        if: runner.os == 'Linux'
+        run: cmake --build --preset linux-debug --parallel 4
+      - name: Test Windows
+        if: runner.os == 'Windows'
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+        run: ctest --preset windows-debug
+      - name: Test Linux
+        if: runner.os == 'Linux'
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+        run: ctest --preset linux-debug
+      - name: Validate JSON schema and format
+        shell: bash
+        run: |
+          python -m pip install jsonschema==4.23.0
+          python tools/check_contracts.py
+      - name: Offline core configure
+        run: cmake -S . -B out/offline -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+      - name: Offline core build
+        run: cmake --build out/offline --config Release --parallel 4

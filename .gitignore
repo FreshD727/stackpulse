@@ -1,0 +1,13 @@
+/out/
+/build/
+/.vs/
+/vcpkg_installed/
+CMakeUserPresets.json
+*.nes
+*.NES
+*.rom
+*.ROM
+*.sfc
+*.smc
+*.sav
+*.zip

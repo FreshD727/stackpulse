@@ -1,0 +1,64 @@
+# Core contracts v1
+
+## Implemented M0 diagnostic contract
+
+Status: diagnostic contract frozen with `include/stackpulse/core.hpp`. It is a deterministic cursor/input feasibility exercise, not a falling-block simulation, playable Classic, battle engine, or replay implementation. The header is authoritative for C++ signatures; the following defines behavior. Core uses C++20 fixed-width integer arithmetic without SDL, clocks, filesystem or networking. A single caller owns mutable State; presentation reads copies. No shared mutable global state.
+
+`Action : uint32`: left=1, right=2, down=4, rotate=8; valid mask=15. `InputFrame` contains `held`, `pressed`, `released` u32. All masks reject unknown bits; pressed must equal held & ~state.held; released must equal state.held & ~held. Inconsistent sampled edges are rejected unchanged. Adapter is responsible for sampling; an entire press/release within one sample cannot be represented as a held rising edge. No heap allocation or event queue is required.
+
+`State`: tick u64, rng u32, x i32, y i32, held u32, presses u64. Initial state is tick0, normalized rng seed, x4,y0, held0, presses0. Zero seed normalizes to 0x6d2b79f5. State produced by the API always satisfies x0..9,y0..19 and mask limits. Arbitrarily corrupt caller-created state is outside this diagnostic contract.
+
+`step` validates input before mutation. Invalid input returns `invalid_input` and preserves all state. Valid step increments tick modulo 2^64, advances rng exactly once using unsigned xorshift32 (13,17,5), moves one x cell for left/right pressed (both pressed neutral), moves one y cell for down pressed; clamp x0..9,y0..19. Rotate does not move. Update held to input.held and add popcount(pressed) to presses modulo 2^64. StepResult reports error, moved (either coordinate actually changed) and pressed_mask (accepted pressed mask; zero on rejection). No gameplay semantic events exist in M0.
+
+Canonical encoding is exactly 36 bytes: version u32=1; tick u64; rng u32; x i32; y i32; held u32; presses u64, in this order, little endian. Signed fields encode their two's-complement bit pattern; never native struct padding. FNV-1a64 hashes these 36 bytes in order, starting 14695981039346656037, XOR each byte then multiply by 1099511628211 modulo 2^64. This is a diagnostic checksum, not a cryptographic identity. Native `sizeof(State)` is irrelevant. Seed1 first RNG outputs 270369,67634689,2647435461,307599695,2398689233.
+
+## Future gameplay API proposal (unimplemented; not frozen C++ ABI)
+
+This section identifies resumable fields for the proposed Modern/Fusion codec2 appendix below. It does not turn diagnostic bytes into a gameplay snapshot or define a public C++ ABI. Integrator review and golden bytes remain prerequisites to codec implementation. Proposed gameplay input uses player u16, tick u64, sequence u32, held u32; gameplay derives edges from accepted prior held. Full logical mask and timing are in `rules-v1.md`.
+
+PlayerState must include: 400 board cells u8; active piece enum/orientation u8 and x/y i16; has-active boolean; preview array with count; hold piece/availability; piece RNG u32, seven-bag array and cursor; previous logical held/direction priority; DAS selection/charge; gravity accumulator; grounded/lock elapsed/reset count; last successful rotation/kick index; score/lines u64, level u16; combo i32 initialized -1 and B2B boolean; pending garbage packet list; life-state enum, elimination tick/reason; outgoing event counter u64. Enumerated values must have explicit tags. Unused slots use the exact sentinel values in the codec appendix. RNG/timers must not be reconstructed from visible board.
+
+MatchState must include schema and rules digest; tick u64; ascending stable player IDs and PlayerStates; target choice per player; target and garbage RNG per player; scheduled external events sorted (tick,event ID); disconnected deadlines; result status/placements. Start roster max8 players; max16 spectators are transport subscribers, not player simulation state. Proposed capacities: 64 pending packets/player, 512 total queued rows/player, 256 scheduled external events and 256 emitted semantic events/tick. Capacity exhaustion is an explicit session error with unchanged pre-tick state, never silent discard or invented top-out. Gameplay tick u64 overflow likewise errors. These limits must be pressure tested.
+
+Proposed `advance_match` uses one immutable Ruleset and one input per player, mutates only caller-owned state atomically on success and returns bounded semantic events. It never accepts client attack/score/outcome claims. Errors: invalid state/rules/input, unsupported version, capacity exceeded, counter exhaustion. Snapshot capture contains complete MatchState plus accepted-input acknowledgements and canonical SHA-256 digest. Presentation views are separate reduced immutable structures and cannot be used to resume.
+
+Stable gameplay event ID=(match u64,tick u64,source player u16,ordinal u16); order by source then ordinal within a tick. Proposed event tags are moved, rotated, held, dropped, locked, cleared, attack, garbage_inserted, eliminated, match_result. Failed actions may have presentation diagnostics but cannot alter authoritative semantic state. No M0 network/replay compatibility is claimed.
+
+## Proposed Modern/Fusion state codec2 (reviewable complete encoding)
+
+Status: exact proposed byte contract, not implemented, no golden-byte acceptance yet. Reserve codec1 for diagnostic; codec2 is Modern/Fusion only. Classic is rejected by codec2 until a separate measured extension/version exists. This appendix overrides inventory shorthand above. All unsigned widths are bits; signed i8/i16/i32 use two's complement. All multi-byte fields little endian, booleans u8 exactly0/1, no padding, no native ABI serialization, no omitted/default fields, no trailing bytes. SHA-256 hashes exactly these state bytes. Unknown enums, noncanonical ordering, invalid counts/ranges or mismatch with immutable embedded rules rejects before mutation. Maximum state bytes250000.
+
+Top-level canonical order:
+
+1. codec u16=2, match u64(nonzero), tick u64, rulesDigest[32], playerCount u8(2..8).
+2. playerCount Player records below in strictly increasing player ID.
+3. scheduledCount u16(0..256), scheduled records below sorted by (delivery tick,event ID), no duplicate event IDs.
+4. resultStatus u8(0playing/1winner/2draw), resultTick u64, placementCount u8(0..8), placementCount records (player u16,placement u8,reason u8) sorted by player. While playing, resultTick/count=0; ended state has one placement for each roster player, resultTick<=tick. Prior eliminated players retain placements in their Player record until final result.
+
+Player canonical field order:
+
+| Fields in order | Exact encoding / constraint |
+| --- | --- |
+| Identity/life | player u16(nonzero); life u8(0alive/1eliminated); eliminationTick u64; eliminationReason u8; placement u8; disconnected u8; reconnectDeadline u64 |
+| Board | 400 u8 cells, row-major y=-20..19 then x=0..9, values0..8 |
+| Active | hasActive u8; piece u8; orientation u8; x i16; y i16 |
+| Preview/hold | previewCount u8(1..5, must equal rules); preview[5] u8; holdPiece u8; holdAvailable u8 |
+| Piece generator | pieceRng u32(nonzero); bag[7] u8; bagCursor u8(0..7) |
+| Horizontal input | previousHeld u32(valid mask255); horizontalPriority i8(-1left/0neutral/+1right); selectedDirection i8(same tags); dasCharge u64 |
+| Vertical/locking | gravityAccumulator u64; grounded u8; lockElapsed u64; lockResetCount u8(<=rules cap); lastRotation u8; lastKick u8 |
+| Rewards | score u64; lines u64; level u16(0..20); combo i32(-1..2147483647); backToBack u8 |
+| Battle | target u16(0none or different roster ID); garbageRng u32(nonzero); targetRng u32(nonzero); outgoingEventCounter u64 |
+| Pending packets | pendingCount u8(0..64); pendingCount Packet records, sorted (creation tick,event ID), total remaining rows<=512 |
+| Deduplication | recentCount u16(0..1024); recentCount event IDs sorted lexicographically, no duplicates |
+
+Piece tags: I0,J1,L2,O3,S4,T5,Z6,none255; board piece IDs remain1..7 per rules. Orientation0,R1,2=2,L3. hasActive0 requires piece255/orientation0/x0/y0, gravityAccumulator=0, grounded=0, lockElapsed=0, lockResetCount=0, lastRotation=0 and lastKick=255. Elimination clears hasActive and applies these inactive sentinels, including when spawn collision caused elimination; eliminated board cells remain resumable. Unused preview slots and absent hold are255. bag is a permutation0..6, cursor7 means exhausted and next draw reshuffles; initial state can use identity bag/cursor7. Enabled active piece must be collision-free; x/y may be outside board range only where its actual occupied cells remain inside storage. lastRotation0 requires lastKick255; lastRotation1 requires lastKick0..4 (O index0). New piece initializes lastKick255. Grounded flag must equal downward collision probe. Horizontal neutral resets dasCharge0; priority captures last-press/tie policy, selectedDirection drives DAS. Classic-specific input/RNG/timer state has no slot and is unsupported.
+
+Elimination reasons:0none,1spawnCollision,2hiddenLock,3garbageOverflow,4forfeit. Alive requires reason/tick/placement0. Eliminated requires reason1..4, eliminationTick<=tick, placement1..8. A simultaneous elimination uses the battle shared placement rule. Connected players encode reconnectDeadline0; disconnected players encode their absolute deadline. Result reason0 denotes the surviving winner. combo increments saturating at INT32_MAX; attack combo bonus remains capped4. outgoingEventCounter increments per semantic event and errors on exhaustion; stable event ordinal is the per-tick emission index0..255, counter persists for diagnostics/dedup audits. Timers have no implicit wall-clock dependencies; overflow errors atomically. Preview always includes the next piece and is refilled immediately after consumption; emitted pieces are consumed in array order.
+
+Packet canonical order: event ID (match u64,tick u64,source u16,ordinal u16), source u16,recipient u16,creationTick u64,eligibleTick u64,remainingRows u16(1..512),hole u8(0..9). Event match=current match, event tick=creationTick, event source=source, recipient=owning player, eligibleTick=creationTick+30 without overflow. Source is another roster player. Duplicated fields must agree. Recent IDs track every packet incorporated in the last120 ticks; prune entries with event.tick+121<current tick. No packet may be newly delivered except at creationTick+1; older delivery is rejected, so removed history cannot revive canceled packets. Max8 sources*121 ticks fits1024 IDs. Canceling a packet preserves its recent ID. Presentation event deduplication is separate from resumable authoritative state.
+
+Scheduled record canonical order: deliveryTick u64, event ID, tag u8, then tag-specific payload. Tag1 packet arrival has one Packet; deliveryTick=packet.creationTick+1 and record ID=packet ID. Tag2 disconnected and tag3 reconnected each have player u16 only, ID.source=0 (server lifecycle source), ID.tick=deliveryTick. No credentials in state. Lifecycle IDs use per-tick system ordinal0..255. Delivery tick>=state.tick; tag/player/packet validation happens before insertion. Apply scheduled events once sorted by delivery tick then ID; remove consumed events. Other external tags are unsupported. Future events may only be installed by authoritative room code, not arbitrary client messages. Duplicate scheduling with identical ID/payload is idempotent; conflicting duplicate errors. Speculative copies may receive equivalent authoritative events but cannot invent attacks.
+
+Proposed gameplay semantic event payload codec: common event ID, tag u8 then payload. Tags1moved(x i16,y i16),2rotated(orientation u8,kick u8),3held(piece u8),4dropped(distance u8,hard u8),5locked(piece u8,x i16,y i16,orientation u8),6cleared(rows u8,spin u8,scoreDelta u64),7attack(Packet),8garbage_inserted(rows u8,hole u8),9eliminated(reason u8,placement u8),10match_result(resultStatus u8,placementCount u8,sorted placement records). spin0none/1full; all other spin tags reject. Gameplay replay External type accepts only scheduled record payloads with tags1..3 above, not arbitrary semantic reward events. These events are outputs; state bytes contain the causes needed to regenerate them.
+
+The snapshot envelope adds accepted input acknowledgements outside these bytes. Rules bytes remain embedded in replay/start context and must match rulesDigest. This codec makes inventories concrete for dependent owners; implementation acceptance still requires golden packets, round-trip restoration, capacities, corruption tests and cross-platform determinism. M0 does not register codec2 in any executable.

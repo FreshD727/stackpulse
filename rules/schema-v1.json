@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:stackpulse:rules:proposed-v1",
+  "title": "Proposed Modern/Fusion rules manifest (not an M0 runtime format)",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "preset": {
+      "enum": [
+        "modern",
+        "fusion"
+      ]
+    },
+    "preset_version": {
+      "const": 1
+    },
+    "status": {
+      "const": "proposed"
+    },
+    "clock": {
+      "const": {
+        "numerator": 60,
+        "denominator": 1
+      }
+    },
+    "board": {
+      "const": {
+        "width": 10,
+        "visible_rows": 20,
+        "hidden_rows": 20
+      }
+    },
+    "geometry": {
+      "const": "project-90-v1"
+    },
+    "spawn": {
+      "const": {
+        "x": 3,
+        "y": -2,
+        "orientation": 0
+      }
+    },
+    "gravity": {
+      "const": "project-gravity-v1"
+    },
+    "randomizer": {
+      "const": "project-seven-bag-v1"
+    },
+    "battle": {
+      "const": "battle-v1"
+    },
+    "input": {
+      "const": "project-input-v1"
+    },
+    "das_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120
+    },
+    "repeat_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 60
+    },
+    "lock_ticks": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 120
+    },
+    "lock_reset_cap": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30
+    },
+    "entry_ticks": {
+      "const": 0
+    },
+    "clear_ticks": {
+      "const": 0
+    },
+    "preview": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "hold": {
+      "type": "boolean"
+    },
+    "hard_drop": {
+      "type": "boolean"
+    },
+    "ghost_default": {
+      "type": "boolean"
+    },
+    "top_out": {
+      "const": "project-topout-v1"
+    },
+    "score": {
+      "const": "battle-score-v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "preset",
+    "preset_version",
+    "status",
+    "clock",
+    "board",
+    "geometry",
+    "spawn",
+    "gravity",
+    "randomizer",
+    "battle",
+    "input",
+    "das_ticks",
+    "repeat_ticks",
+    "lock_ticks",
+    "lock_reset_cap",
+    "entry_ticks",
+    "clear_ticks",
+    "preview",
+    "hold",
+    "hard_drop",
+    "ghost_default",
+    "top_out",
+    "score"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "preset": {
+            "const": "modern"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "das_ticks": {
+            "const": 6
+          },
+          "repeat_ticks": {
+            "const": 2
+          },
+          "lock_ticks": {
+            "const": 30
+          },
+          "lock_reset_cap": {
+            "const": 15
+          },
+          "preview": {
+            "const": 5
+          },
+          "hold": {
+            "const": true
+          },
+          "hard_drop": {
+            "const": true
+          },
+          "ghost_default": {
+            "const": true
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "preset": {
+            "const": "fusion"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "das_ticks": {
+            "const": 16
+          },
+          "repeat_ticks": {
+            "const": 6
+          },
+          "lock_ticks": {
+            "const": 18
+          },
+          "lock_reset_cap": {
+            "const": 8
+          },
+          "preview": {
+            "const": 1
+          },
+          "hold": {
+            "const": false
+          },
+          "hard_drop": {
+            "const": false
+          },
+          "ghost_default": {
+            "const": false
+          }
+        }
+      }
+    }
+  ]
+}
