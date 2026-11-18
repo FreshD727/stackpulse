@@ -113,3 +113,36 @@ TEST_CASE("resized presentation uses the largest proportional viewport", "[clien
         REQUIRE(actual.h == Catch::Approx(viewport.h));
     }
 }
+
+TEST_CASE("Modern input translates platform drop before hold without swapping bits",
+          "[client][input]") {
+    namespace in = stackpulse::input;
+    namespace modern = stackpulse::modern;
+    in::TickInput sample;
+    sample.held[static_cast<std::size_t>(in::Action::drop)] = true;
+    REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hard_drop);
+    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == 0);
+    sample.held[static_cast<std::size_t>(in::Action::drop)] = false;
+    sample.held[static_cast<std::size_t>(in::Action::hold)] = true;
+    REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hold);
+    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == 0);
+    sample.held[static_cast<std::size_t>(in::Action::left)] = true;
+    sample.held[static_cast<std::size_t>(in::Action::clockwise)] = true;
+    sample.held[static_cast<std::size_t>(in::Action::pause)] = true;
+    REQUIRE(client::modern_input(sample, modern::Preset::fusion) ==
+            (modern::left | modern::clockwise));
+}
+
+TEST_CASE("Modern pieces use the named Classic palette groups", "[client][palette]") {
+    namespace modern = stackpulse::modern;
+    namespace classic = stackpulse::classic;
+    constexpr std::array pairs{std::pair{modern::Piece::I, classic::Piece::I},
+                               std::pair{modern::Piece::J, classic::Piece::J},
+                               std::pair{modern::Piece::L, classic::Piece::L},
+                               std::pair{modern::Piece::O, classic::Piece::O},
+                               std::pair{modern::Piece::S, classic::Piece::S},
+                               std::pair{modern::Piece::T, classic::Piece::T},
+                               std::pair{modern::Piece::Z, classic::Piece::Z}};
+    for (const auto& [modern_piece, classic_piece] : pairs)
+        REQUIRE(client::classic_palette_piece(modern_piece) == classic_piece);
+}

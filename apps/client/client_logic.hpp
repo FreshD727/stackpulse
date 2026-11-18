@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <optional>
 #include <stackpulse/classic.hpp>
+#include <stackpulse/input.hpp>
+#include <stackpulse/modern.hpp>
 
 namespace stackpulse::client {
 // Original retro palettes: light pieces plus two accents, cycling every ten levels.
@@ -33,6 +35,46 @@ constexpr SDL_Color piece_color(classic::Piece piece, std::uint32_t level) {
     default:
         return palette[2];
     }
+}
+
+// Piece enum orders differ between rulesets; never cast between them.
+constexpr classic::Piece classic_palette_piece(modern::Piece piece) {
+    switch (piece) {
+    case modern::Piece::I:
+        return classic::Piece::I;
+    case modern::Piece::J:
+        return classic::Piece::J;
+    case modern::Piece::L:
+        return classic::Piece::L;
+    case modern::Piece::O:
+        return classic::Piece::O;
+    case modern::Piece::S:
+        return classic::Piece::S;
+    case modern::Piece::T:
+        return classic::Piece::T;
+    case modern::Piece::Z:
+        return classic::Piece::Z;
+    }
+    return classic::Piece::I;
+}
+constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Preset preset) {
+    std::uint32_t mask = 0;
+    constexpr std::array mapping{
+        std::pair{input::Action::left, modern::left},
+        std::pair{input::Action::right, modern::right},
+        std::pair{input::Action::down, modern::down},
+        std::pair{input::Action::clockwise, modern::clockwise},
+        std::pair{input::Action::counterclockwise, modern::counterclockwise}};
+    for (const auto& [action, bit] : mapping)
+        if (sample.held[static_cast<std::size_t>(action)])
+            mask |= bit;
+    if (preset == modern::Preset::modern) {
+        if (sample.held[static_cast<std::size_t>(input::Action::hold)])
+            mask |= modern::hold;
+        if (sample.held[static_cast<std::size_t>(input::Action::drop)])
+            mask |= modern::hard_drop;
+    }
+    return mask;
 }
 
 constexpr SDL_Color block_highlight(SDL_Color color) {
