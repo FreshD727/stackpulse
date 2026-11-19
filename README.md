@@ -1,17 +1,17 @@
-# Stackpulse - M1 provisional Classic vertical slice
+# Stackpulse - Classic, Fusion and Modern offline play
 
-Native C++20/SDL3 falling-block play with offline Marathon, Practice Lab, persistent input settings, replay recording/playback and an SDL-free replay verifier. **Classic-inspired provisional rules** are implemented; NES/reference fidelity is unverified. Rotation has no kicks; independent uniform piece draws, constant entry delays and several timing details remain provisional. See the [behavior and fidelity ledger](specs/classic-reference.md).
+Native C++20/SDL3 falling-block play with Classic, Fusion and Modern offline Marathon, Practice Lab, persistent input settings, replay recording/playback and an SDL-free replay verifier. **Classic-inspired provisional rules** are implemented; NES/reference fidelity is unverified. Classic rotation has no kicks; independent uniform piece draws, constant entry delays and several timing details remain provisional. See the [behavior and fidelity ledger](specs/classic-reference.md).
 
 On Windows install Visual Studio 2026 with Desktop development with C++, a CMake version supporting its Visual Studio 18 generator, and Git. The tested CMake version is 4.5.0-rc2; CMakeLists.txt's 3.25 floor applies to older supported generators, not the VS2026 preset. From the repository:
 
 ```powershell
 cmake --preset windows-debug
-cmake --build --preset windows-debug --parallel 4
+cmake --build --preset windows-debug -- /m:1 /p:BuildInParallel=false
 ctest --preset windows-debug
 .\out\build\windows-debug\Debug\stackpulse_client.exe
 ```
 
-Choose Marathon or Practice from the home menu. Default play keys are Left/Right/Down, X clockwise, Z counterclockwise and Escape pause. Menus use Up/Down or W/S and Enter; gamepad navigation and remapping are available. Practice provides restart with the same seed, a new seed, frame stepping, an authored four-line clear fixture and an event timeline. Settings persist keyboard/gamepad bindings, start level and optional left-stick input. Full controls, persistence locations and diagnostics are in the [client guide](apps/client/README.md).
+Choose the MODE row (Enter/confirm cycles Classic, Fusion, Modern), then Marathon or Practice from the home menu. Modern adds C hold and Space hard drop by default, five previews and a ghost. Fusion has one preview, 16/6 DAS/repeat and 18-tick lock delay with eight resets; hold/hard drop/ghost stay disabled. Modern uses 6/2 handling and 30-tick lock delay with fifteen resets. Default play keys are Left/Right/Down, X clockwise, Z counterclockwise and Escape pause. Menus use Up/Down or W/S and Enter; gamepad navigation and remapping are available. Practice provides restart with the same seed, a new seed, frame stepping, an authored four-line clear fixture and an event timeline. Fusion/Modern Practice uses F7/F8/F9 for playable spin single/double/triple fixtures (press CW then wait to lock), and F10 for an initial-state garbage demo. Practice frame step records the accepted input; fixture/demo restarts record the full initial state. Settings persist keyboard/gamepad bindings, start level and optional left-stick input. Full controls, persistence locations and diagnostics are in the [client guide](apps/client/README.md).
 
 Recordings save the complete initial state and accepted tick inputs. The home menu can load the last replay for playback. The independent verifier accepts an explicit file path:
 
@@ -34,6 +34,8 @@ cmake --build out/core --config Release
 
 On Linux use Ninja instead of the Visual Studio generator. `headless` is the equivalent Ninja preset when a C++20 compiler is already available. `STACKPULSE_FETCH_DEPENDENCIES=OFF` supports installed package configs, including a vcpkg toolchain; that alternative path remains untested. Exact tested dependency revisions and licenses are recorded in CMakeLists.txt and THIRD_PARTY_NOTICES.md.
 
-See [M1 validation and outstanding gates](docs/M1_VALIDATION.md), [historical M0 validation](docs/M0_VALIDATION.md), [design](docs/GAME_DESIGN.md), and [work plan](docs/DEVELOPMENT_PLAN.md). Future Modern/Fusion, multiplayer/server, networking and release services are not implemented. No ROM is accessed by the build/tests; no reference trace or physical controller/rolling fidelity approval is claimed.
+See [M1 validation and outstanding gates](docs/M1_VALIDATION.md), [historical M0 validation](docs/M0_VALIDATION.md), [design](docs/GAME_DESIGN.md), and [work plan](docs/DEVELOPMENT_PLAN.md). See [M2 validation and remaining gates](docs/M2_VALIDATION.md) for the separate full Modern/Fusion core, rewards, pending-garbage simulation, deterministic headless match harness and SPMR replay. Multiplayer/server transport, networking and release services remain future work. No ROM is accessed by the build/tests; no reference trace or physical controller/rolling fidelity approval is claimed.
 
 Issue-1 fixes and validation are recorded in [the resolution](docs/issues/issue-1-resolution.md). See [formatting and opt-in pre-commit checks](docs/FORMATTING.md).
+
+Fusion/Modern recordings use separate `SPMR` v1 files, with full initial state and exact embedded preset/table identity; Classic `SPCR` playback is preserved. Verify them with `stackpulse_modern_replay_verify.exe FILE` or client `--verify FILE`. The native home replay action reads the latest compatible recording. Neither codec claims future SPR1 network-event/seek support. `--mode fusion|modern` selects a mode at startup; `--capture FILE.bmp --smoke-frames 5` supports automated renderer inspection.

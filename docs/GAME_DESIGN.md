@@ -1,6 +1,6 @@
 # Game design and technical plan
 
-Status: proposed implementation baseline, 17 November 2026. Based on `../idea.md`.
+Status: design baseline, 17 November 2026; updated 18 November 2026. Offline Classic/Fusion/Modern now run; fidelity, human Fusion handling, networking and release gates remain open. See M2_VALIDATION.md. Based on `../idea.md`.
 Companion: [development work packages](DEVELOPMENT_PLAN.md).
 
 ## 1. Product direction

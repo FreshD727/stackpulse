@@ -1,6 +1,6 @@
 # Battle v1
 
-Status: v1 proposed project balance/order contract; acceptance pending per M0 report, unimplemented and untested in M0. Applies to Modern/Fusion only; Classic Marathon has no garbage. No account, ranked or secure public service is implied.
+Status: M2 implements the project balance/order mechanics in `modern` and the headless `match` harness. Automated tests pass; human balance and M3 network validation remain pending. Applies to Modern/Fusion only; Classic Marathon has no garbage. No account, ranked or secure public service is implied.
 
 | Clear | Base score | Base attack |
 | --- | ---: | ---: |

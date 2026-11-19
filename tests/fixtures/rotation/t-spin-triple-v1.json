@@ -1,8 +1,8 @@
 {
   "fixture_version": 1,
-  "status": "geometry-validated-gameplay-execution-pending",
-  "rules": "modern-v1 proposed",
-  "purpose": "CW fifth kick enters T-spin triple cavity; standalone geometry check only",
+  "status": "implemented-m2-input-execution-passed",
+  "rules": "modern-v1",
+  "purpose": "CW fifth kick enters T-spin triple cavity; executed by Modern core test",
   "coordinates": "x right, y down; rows indexed y+20",
   "board": [
     [

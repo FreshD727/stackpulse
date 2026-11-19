@@ -1,6 +1,6 @@
 # Proposed gameplay rules v1
 
-Status: v1 proposed Modern/Fusion contract; acceptance pending per M0 report, not implemented or balance validated. Classic remains gated by `classic-reference.md`. M0 executable implements only `core-api-v1.md` diagnostic behavior. Changing any normative value requires a new rules version and compatibility review.
+Status: v1 Modern/Fusion mechanics implemented in M2; human handling/balance validation remains pending. Built-in C++ presets, not a runtime JSON loader, are used; see `docs/M2_VALIDATION.md` for codec and rules-identity differences. Classic remains gated by `classic-reference.md`. M0 executable implements only `core-api-v1.md` diagnostic behavior. Changing any normative value requires a new rules version and compatibility review.
 
 ## Data and coordinates
 
