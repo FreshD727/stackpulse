@@ -5,12 +5,13 @@
 namespace stackpulse::modern_replay {
 namespace {
 constexpr std::string_view rules =
-    "modern-fusion-m2-v1;codec=modern-state-v1;tick=60/1;board=10x40;spawn=3,-2;"
-    "geometry=project-90-v1;rotation=SRS-project;random=xorshift32-seven-bag;"
-    "presets=fusion:das16,repeat6,lock18,cap8,preview1|modern:das6,repeat2,lock30,cap15,preview5;"
-    "battle=battle-v1;gravity=project-gravity-v1;score=battle-score-v1;held-mask=255;"
-    "full-state=board,active,bag,next,hold,input,timers,rotation,rewards,garbage,rngs;"
-    "hash=fnv1a64;checkpoints=600;overflow=reject";
+    "modern-fusion-issue2-v2;codec=modern-state-v2;tick=60/1;board=10x40;"
+    "geometry=project-90-v1;rotation=SRS-project;fusion=classic-uniform,preview1,hold1,spawn0,"
+    "classic-gravity,startlevel0-29,immediate-nonT,lockT30,cap15;"
+    "modern=bag7,preview5,spawn-2,das10,repeat3,lock30,cap15;fusion-das16,repeat6;"
+    "softdrop=one-cell-per-tick-no-backlog;harddrop=both;allclear=2000*(level+1);"
+    "score=fusion-classic,spin1600-2400-3200*(level+1)|modern-battle-v1;"
+    "battle=battle-v1;held-mask=255;hash=fnv1a64;checkpoints=600;overflow=reject";
 constexpr std::size_t max_bytes = 8 * 1024 * 1024;
 void put(std::vector<std::uint8_t>& b, std::uint64_t v, unsigned n) {
     for (unsigned i = 0; i < n; ++i)
@@ -65,14 +66,18 @@ bool verify(const Replay& r, modern::State& final_state, std::string& error) {
     return true;
 }
 bool encode(const Replay& r, std::vector<std::uint8_t>& bytes, std::string& error) {
-    modern::State final_state;
-    if (!verify(r, final_state, error))
-        return false;
+    error.clear();
+    if (r.inputs.size() > max_frames)
+        return fail(error, "frame limit exceeded");
+    if (!modern::valid_state(r.initial))
+        return fail(error, "invalid initial state");
+    if (r.initial.tick > std::numeric_limits<std::uint64_t>::max() - r.inputs.size())
+        return fail(error, "tick wrap forbidden");
     auto state_bytes = modern::canonical_bytes(r.initial);
     if (state_bytes.size() > 262144)
         return fail(error, "initial state limit exceeded");
     std::vector<std::uint8_t> b{'S', 'P', 'M', 'R'};
-    put(b, 1, 2);
+    put(b, 2, 2);
     put(b, 0, 2);
     put(b, rules.size(), 4);
     put(b, state_bytes.size(), 4);
@@ -88,7 +93,8 @@ bool encode(const Replay& r, std::vector<std::uint8_t>& bytes, std::string& erro
     put(b, 0, 4);
     put(b, modern::state_hash(s), 8);
     for (std::size_t i = 0; i < r.inputs.size(); ++i) {
-        modern::step(s, r.inputs[i]);
+        if (!modern::step(s, r.inputs[i]))
+            return fail(error, "invalid held input or state");
         if ((i + 1) % 600 == 0 || i + 1 == r.inputs.size()) {
             put(b, i + 1, 4);
             put(b, modern::state_hash(s), 8);
@@ -107,8 +113,8 @@ bool decode(const std::vector<std::uint8_t>& bytes, Replay& out, std::string& er
         if (checksum.get(4) != crc(bytes.data(), bytes.size() - 4))
             return fail(error, "replay CRC mismatch");
         Reader p{bytes};
-        if (p.get(4) != 0x524d5053u || p.get(2) != 1 || p.get(2) != 0)
-            return fail(error, "unsupported Modern replay format");
+        if (p.get(4) != 0x524d5053u || p.get(2) != 2 || p.get(2) != 0)
+            return fail(error, "incompatible Modern/Fusion replay format (requires issue-2 v2)");
         const auto rules_len = p.get(4), state_len = p.get(4), frames = p.get(4), hashes = p.get(4);
         if (rules_len > 4096 || state_len > 262144 || frames > max_frames ||
             hashes != frames / 600 + 1 + (frames % 600 != 0))

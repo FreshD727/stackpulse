@@ -4,13 +4,13 @@
 #include <stackpulse/modern.hpp>
 namespace stackpulse::modern {
 bool valid_state(const State& s) noexcept {
-    if (static_cast<unsigned>(s.preset) > 1 || static_cast<unsigned>(s.active.piece) > 6 ||
+    if (s.start_level > 29 || (s.preset == Preset::modern && s.start_level != 0) ||
+        static_cast<unsigned>(s.preset) > 1 || static_cast<unsigned>(s.active.piece) > 6 ||
         s.active.rotation > 3 || s.active.x < -4 || s.active.x > 10 || s.active.y < -20 ||
         s.active.y > 19 || s.held & ~action_mask || !s.rng || !s.garbage_rng || !s.target_rng ||
         s.bag_cursor > 7 || static_cast<unsigned>(s.held_piece) > 6 || s.direction < -1 ||
-        s.direction > 1 || s.combo < -1 || s.combo > 1000000 ||
-        s.lock_resets > (s.preset == Preset::fusion ? 8 : 15) || s.last_kick > 4 ||
-        s.gravity_timer > 60 || s.lock_elapsed > 30 || s.incoming.size() > 256 ||
+        s.direction > 1 || s.combo < -1 || s.combo > 1000000 || s.lock_resets > 15 ||
+        s.last_kick > 4 || s.gravity_timer > 60 || s.lock_elapsed > 30 || s.incoming.size() > 256 ||
         s.received_ids.size() > 4096)
         return false;
     if (!s.game_over)
@@ -88,11 +88,12 @@ struct Reader {
 } // namespace
 std::vector<std::uint8_t> canonical_bytes(const State& s) {
     Writer w;
-    w.u(1, 4);
+    w.u(2, 4);
     w.u(static_cast<unsigned>(s.preset), 1);
     w.u(s.tick, 8);
     w.u(s.score, 8);
     w.u(s.lines, 8);
+    w.u(s.start_level, 4);
     for (auto c : s.board)
         w.u(c, 1);
     w.u(static_cast<unsigned>(s.active.piece), 1);
@@ -139,13 +140,14 @@ bool decode_state(const std::vector<std::uint8_t>& b, State& out) {
     if (b.size() > 50000)
         return false;
     Reader r{b};
-    if (r.u(4) != 1)
+    if (r.u(4) != 2)
         return false;
     State s;
     s.preset = static_cast<Preset>(r.u(1));
     s.tick = r.u(8);
     s.score = r.u(8);
     s.lines = r.u(8);
+    s.start_level = static_cast<std::uint32_t>(r.u(4));
     for (auto& c : s.board)
         c = static_cast<std::uint8_t>(r.u(1));
     s.active.piece = static_cast<Piece>(r.u(1));

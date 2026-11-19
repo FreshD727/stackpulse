@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <limits>
+#include <stackpulse/classic.hpp>
 #include <stackpulse/modern.hpp>
 namespace stackpulse::modern {
 namespace {
@@ -50,6 +51,15 @@ std::uint32_t normalize(std::uint32_t x) {
     return x ? x : 0x6d2b79f5u;
 }
 Piece draw(State& s) {
+    if (s.preset == Preset::fusion) {
+        constexpr std::array<Piece, 7> classic_order{
+            Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
+        std::uint32_t n;
+        do {
+            n = random(s.rng);
+        } while (n < 4);
+        return classic_order[n % 7];
+    }
     if (s.bag_cursor == 7) {
         for (unsigned i = 0; i < 7; ++i)
             s.bag[i] = static_cast<Piece>(i);
@@ -61,6 +71,10 @@ Piece draw(State& s) {
 }
 Piece take(State& s) {
     const auto p = s.next[0];
+    if (s.preset == Preset::fusion) {
+        s.next[0] = draw(s);
+        return p;
+    }
     std::move(s.next.begin() + 1, s.next.end(), s.next.begin());
     s.next.back() = draw(s);
     return p;
@@ -80,7 +94,7 @@ void add(std::uint64_t& a, std::uint64_t b) {
             : a + b;
 }
 void spawn(State& s, Piece p) {
-    s.active = {p, 0, 3, -2};
+    s.active = {p, 0, 3, s.preset == Preset::fusion ? 0 : -2};
     s.gravity_timer = 0;
     s.lock_elapsed = 0;
     s.lock_resets = 0;
@@ -160,7 +174,7 @@ void lock(State& s, Events& e) {
     if (e.cleared) {
         const bool qualifies = e.spin || e.cleared == 4;
         e.back_to_back = qualifies && s.back_to_back;
-        if (e.back_to_back) {
+        if (e.back_to_back && s.preset == Preset::modern) {
             points = points * 3 / 2;
             ++e.attack;
         }
@@ -173,9 +187,19 @@ void lock(State& s, Events& e) {
             e.attack += 6;
     } else
         s.combo = -1;
-    add(s.score, points);
-    e.score_delta += points;
     add(s.lines, e.cleared);
+    std::uint64_t awarded = points;
+    if (s.preset == Preset::fusion) {
+        constexpr std::array<unsigned, 5> classic_points{0, 40, 100, 300, 1200};
+        constexpr std::array<unsigned, 4> fusion_spin{0, 1600, 2400, 3200};
+        awarded =
+            e.spin ? fusion_spin[std::min(e.cleared, 3u)] : classic_points[std::min(e.cleared, 4u)];
+        awarded *= static_cast<std::uint64_t>(level(s)) + 1;
+    }
+    if (e.perfect_clear)
+        awarded += 2000ull * (static_cast<std::uint64_t>(level(s)) + 1);
+    add(s.score, awarded);
+    e.score_delta += awarded;
     for (auto& p : s.incoming) {
         const auto cancel = std::min<unsigned>(e.attack, p.rows);
         p.rows = static_cast<std::uint16_t>(p.rows - cancel);
@@ -254,15 +278,20 @@ bool rotate(State& s, bool cw) noexcept {
     }
     return false;
 }
-State initial_state(std::uint32_t seed, Preset preset) {
+State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level) {
     State s;
     s.preset = preset;
-    s.rng = normalize(seed);
+    s.start_level = preset == Preset::fusion ? std::min(start_level, 29u) : 0;
+    s.rng = preset == Preset::fusion ? (seed ? seed : 1) : normalize(seed);
     s.garbage_rng = normalize(seed ^ 0xa5a5a5a5u);
     s.target_rng = normalize(seed ^ 0x3c6ef372u);
+    s.bag = {Piece::I, Piece::J, Piece::L, Piece::O, Piece::S, Piece::T, Piece::Z};
     const auto p = draw(s);
-    for (auto& n : s.next)
-        n = draw(s);
+    if (preset == Preset::fusion)
+        s.next[0] = draw(s);
+    else
+        for (auto& n : s.next)
+            n = draw(s);
     spawn(s, p);
     return s;
 }
@@ -279,7 +308,18 @@ Active ghost(const State& s) noexcept {
     }
 }
 std::uint32_t level(const State& s) noexcept {
+    if (s.preset == Preset::fusion)
+        return classic::level_for_lines(s.start_level,
+                                        static_cast<std::uint32_t>(std::min<std::uint64_t>(
+                                            s.lines, std::numeric_limits<std::uint32_t>::max())));
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(20, s.lines / 10));
+}
+std::uint32_t gravity_interval(const State& s) noexcept {
+    if (s.preset == Preset::fusion)
+        return classic::gravity_frames(level(s));
+    constexpr std::array<unsigned, 21> gravity{60, 48, 40, 32, 26, 20, 16, 12, 10, 8, 6,
+                                               5,  4,  3,  2,  1,  1,  1,  1,  1,  1};
+    return gravity[level(s)];
 }
 bool enqueue(State& s, const Packet& p) {
     if (!p.id || !p.rows || p.rows > 1024 || p.hole >= 10 || p.eligible < p.creation)
@@ -313,7 +353,7 @@ bool step(State& s, std::uint32_t held, Events* output) {
     const auto pressed = held & ~s.held;
     const auto old_score = s.score;
     s.held = held;
-    if (s.preset == Preset::modern && (pressed & hold) && !s.hold_used) {
+    if ((pressed & hold) && !s.hold_used) {
         const auto old = s.active.piece;
         const auto p = s.has_hold ? s.held_piece : take(s);
         s.held_piece = old;
@@ -354,8 +394,8 @@ bool step(State& s, std::uint32_t held, Events* output) {
         move = direction != 0;
     } else if (direction) {
         ++s.das_timer;
-        const unsigned delay = s.preset == Preset::fusion ? 16u : 6u,
-                       repeat = s.preset == Preset::fusion ? 6u : 2u;
+        const unsigned delay = s.preset == Preset::fusion ? 16u : 10u,
+                       repeat = s.preset == Preset::fusion ? 6u : 3u;
         move = s.das_timer >= delay && (s.das_timer - delay) % repeat == 0;
     } else
         s.das_timer = 0;
@@ -370,38 +410,43 @@ bool step(State& s, std::uint32_t held, Events* output) {
             manipulation = true;
         }
     }
-    if (s.preset == Preset::modern && (pressed & hard_drop)) {
+    if (pressed & hard_drop) {
+        e.hard_dropped = true;
         const auto a = ghost(s);
         add(s.score, static_cast<std::uint64_t>(a.y - s.active.y) * 2);
         s.active = a;
         lock(s, e);
     } else {
-        constexpr std::array<unsigned, 21> gravity{60, 48, 40, 32, 26, 20, 16, 12, 10, 8, 6,
-                                                   5,  4,  3,  2,  1,  1,  1,  1,  1,  1};
-        const auto interval = (held & down) ? std::min(2u, gravity[level(s)]) : gravity[level(s)];
+        bool blocked_drop = false;
+        const auto interval =
+            (held & down) ? std::min(2u, gravity_interval(s)) : gravity_interval(s);
+        // Changing cadence must never spend old slow-gravity time as multiple soft drops.
+        s.gravity_timer = std::min<std::uint64_t>(s.gravity_timer, interval - 1);
         ++s.gravity_timer;
-        while (s.gravity_timer >= interval) {
-            s.gravity_timer -= interval;
+        if (s.gravity_timer >= interval) {
+            s.gravity_timer = 0;
             auto a = s.active;
             ++a.y;
             if (collides(s, a)) {
+                blocked_drop = true;
                 s.gravity_timer = 0;
-                break;
-            }
-            s.active = a;
-            e.moved = true;
-            if (held & down) {
-                add(s.score, 1);
-                e.soft_dropped = true;
+            } else {
+                s.active = a;
+                e.moved = true;
+                if (held & down) {
+                    add(s.score, 1);
+                    e.soft_dropped = true;
+                }
             }
         }
-        if (was_grounded && manipulation && s.lock_resets < (s.preset == Preset::fusion ? 8 : 15)) {
+        const bool delayed = s.preset == Preset::modern || s.active.piece == Piece::T;
+        if (delayed && was_grounded && manipulation && s.lock_resets < 15) {
             s.lock_elapsed = 0;
             ++s.lock_resets;
         }
         if (grounded(s)) {
-            ++s.lock_elapsed;
-            if (s.lock_elapsed >= static_cast<unsigned>(s.preset == Preset::fusion ? 18 : 30))
+            s.lock_elapsed = delayed ? s.lock_elapsed + 1 : 0;
+            if ((delayed && s.lock_elapsed >= 30) || (!delayed && blocked_drop))
                 lock(s, e);
         } else
             s.lock_elapsed = 0;

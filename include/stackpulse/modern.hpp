@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 namespace stackpulse::modern {
-inline constexpr std::uint32_t rules_version = 1, action_mask = 255;
+inline constexpr std::uint32_t rules_version = 2, action_mask = 255;
 enum class Preset : std::uint8_t { fusion, modern };
 enum Action : std::uint32_t {
     left = 1,
@@ -37,7 +37,7 @@ struct State {
     std::uint64_t tick{}, score{}, lines{};
     std::array<std::uint8_t, 400> board{};
     Active active{};
-    std::uint32_t rng{1}, garbage_rng{1}, target_rng{1}, held{};
+    std::uint32_t start_level{}, rng{1}, garbage_rng{1}, target_rng{1}, held{};
     std::array<Piece, 7> bag{};
     std::uint8_t bag_cursor{7};
     std::array<Piece, 5> next{};
@@ -52,12 +52,13 @@ struct State {
     bool operator==(const State&) const = default;
 };
 struct Events {
-    bool moved{}, shifted{}, soft_dropped{}, rotated{}, held{}, locked{}, spawned{}, topped_out{},
-        spin{}, perfect_clear{}, back_to_back{};
+    bool moved{}, shifted{}, soft_dropped{}, hard_dropped{}, rotated{}, held{}, locked{}, spawned{},
+        topped_out{}, spin{}, perfect_clear{}, back_to_back{};
     std::uint32_t cleared{}, attack{}, canceled{}, inserted{};
     std::uint64_t score_delta{};
 };
-[[nodiscard]] State initial_state(std::uint32_t seed, Preset preset = Preset::modern);
+[[nodiscard]] State
+initial_state(std::uint32_t seed, Preset preset = Preset::modern, std::uint32_t start_level = 0);
 [[nodiscard]] std::array<Cell, 4> cells(const Active&) noexcept;
 [[nodiscard]] bool collides(const State&, const Active&) noexcept;
 [[nodiscard]] Active ghost(const State&) noexcept;
@@ -68,6 +69,7 @@ bool step(State&, std::uint32_t held, Events* events = nullptr);
 bool enqueue(State&, const Packet&);
 [[nodiscard]] bool valid_state(const State&) noexcept;
 [[nodiscard]] std::uint32_t level(const State&) noexcept;
+[[nodiscard]] std::uint32_t gravity_interval(const State&) noexcept;
 [[nodiscard]] std::vector<std::uint8_t> canonical_bytes(const State&);
 bool decode_state(const std::vector<std::uint8_t>&, State&);
 [[nodiscard]] std::uint64_t state_hash(const State&);

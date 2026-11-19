@@ -161,3 +161,43 @@ TEST_CASE("Modern and Classic replay codecs reject each others containers") {
     REQUIRE(modern_replay::encode(modern_record, bytes, error));
     REQUIRE_FALSE(replay::decode(bytes, classic_record, error));
 }
+
+TEST_CASE("Fusion version two replay retains Classic start level hold and complete stream state") {
+    auto s = modern::initial_state(49, modern::Preset::fusion, 19);
+    REQUIRE(modern::step(s, modern::hold));
+    REQUIRE(modern::step(s, modern::left));
+    REQUIRE(modern::enqueue(s, {19, s.tick, s.tick + 30, 2, 5, 8}));
+    modern_replay::Replay r{
+        s, {0, modern::clockwise, 0, modern::hard_drop, 0, modern::hold, 0, modern::down, 0}};
+    std::vector<std::uint8_t> bytes;
+    std::string error;
+    REQUIRE(modern_replay::encode(r, bytes, error));
+    REQUIRE(bytes[4] == 2);
+    modern_replay::Replay out;
+    REQUIRE(modern_replay::decode(bytes, out, error));
+    REQUIRE(out.initial == s);
+    REQUIRE(out.initial.start_level == 19);
+    modern::State a, b;
+    REQUIRE(modern_replay::verify(r, a, error));
+    REQUIRE(modern_replay::verify(out, b, error));
+    REQUIRE(a == b);
+    REQUIRE(a.rng == b.rng);
+    REQUIRE(a.next == b.next);
+
+    auto broken = bytes;
+    broken[4] = 1;
+    reseal(broken);
+    REQUIRE_FALSE(modern_replay::decode(broken, out, error));
+    REQUIRE(out.initial == s);
+    broken = bytes;
+    const auto state_start = 24 + u32(bytes, 8);
+    broken[state_start] = 1;
+    reseal(broken);
+    REQUIRE_FALSE(modern_replay::decode(broken, out, error));
+    REQUIRE(out.initial == s);
+    broken = bytes;
+    broken[24] ^= 1;
+    reseal(broken);
+    REQUIRE_FALSE(modern_replay::decode(broken, out, error));
+    REQUIRE(out.initial == s);
+}

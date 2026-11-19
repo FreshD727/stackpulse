@@ -3,6 +3,7 @@
 #include <fstream>
 #include <limits>
 #include <regex>
+#include <stackpulse/classic.hpp>
 #include <stackpulse/modern.hpp>
 #include <string>
 using namespace stackpulse::modern;
@@ -95,7 +96,7 @@ TEST_CASE("Authored single double triple spin routes run from actual input") {
             REQUIRE(s.active.x == 3);
             REQUIRE(s.active.y == 17);
             REQUIRE(s.last_kick == 4);
-            const unsigned delay = preset == Preset::modern ? 30u : 18u;
+            const unsigned delay = 30u;
             for (unsigned tick = 1; tick < delay; ++tick) {
                 REQUIRE(step(s, 0, &e));
                 if (tick + 1 < delay)
@@ -105,11 +106,11 @@ TEST_CASE("Authored single double triple spin routes run from actual input") {
             REQUIRE(e.spin);
             REQUIRE(e.cleared == rows);
             REQUIRE(e.attack == 2 * rows);
-            REQUIRE(s.score == 400 + 400 * rows);
+            REQUIRE(s.score == (preset == Preset::fusion ? 800 + 800 * rows : 400 + 400 * rows));
             REQUIRE_FALSE(e.perfect_clear);
         }
 }
-TEST_CASE("Hold drop ghost and Fusion restrictions") {
+TEST_CASE("Hold drop and ghost work in both presets") {
     auto s = initial_state(1);
     const auto first = s.active.piece;
     const auto next = s.next[0];
@@ -129,11 +130,18 @@ TEST_CASE("Hold drop ghost and Fusion restrictions") {
     REQUIRE(landing.y >= 0);
     REQUIRE(s.score > 0);
     s = initial_state(1, Preset::fusion);
-    auto before = s.active;
+    const auto fusion_first = s.active.piece;
+    const auto fusion_next = s.next[0];
     REQUIRE(step(s, hold | hard_drop, &e));
-    REQUIRE_FALSE(e.held);
+    REQUIRE(e.held);
     REQUIRE_FALSE(e.locked);
-    REQUIRE(s.active == before);
+    REQUIRE(s.held_piece == fusion_first);
+    REQUIRE(s.active.piece == fusion_next);
+    REQUIRE(step(s, 0));
+    REQUIRE(step(s, hard_drop, &e));
+    REQUIRE(e.hard_dropped);
+    REQUIRE(e.locked);
+    REQUIRE_FALSE(s.hold_used);
 }
 TEST_CASE("DAS preset timing and opposite directional ties") {
     for (auto p : {Preset::fusion, Preset::modern}) {
@@ -141,7 +149,7 @@ TEST_CASE("DAS preset timing and opposite directional ties") {
         s.active = {Piece::O, 0, 3, 0};
         REQUIRE(step(s, left));
         REQUIRE(s.active.x == 2);
-        const unsigned delay = p == Preset::fusion ? 16u : 6u;
+        const unsigned delay = p == Preset::fusion ? 16u : 10u;
         for (unsigned t = 1; t < delay; ++t) {
             REQUIRE(step(s, left));
             REQUIRE(s.active.x == 2);
@@ -209,7 +217,7 @@ TEST_CASE("Back to back combos perfect clear and nonspin lateral invalidation") 
     REQUIRE(e.cleared == 1);
     REQUIRE(e.perfect_clear);
     REQUIRE(e.attack == 6);
-    REQUIRE(s.score == 100);
+    REQUIRE(s.score == 2100);
     s = initial_state(1);
     s.last_rotation = true;
     REQUIRE(step(s, left));
@@ -316,10 +324,9 @@ TEST_CASE("Simultaneous rotations cancel and blocked rotation preserves marker")
 TEST_CASE("Grounded manipulation reset caps persist and force a lock") {
     for (auto preset : {Preset::fusion, Preset::modern}) {
         auto s = initial_state(1, preset);
-        s.active = {Piece::O, 0, 3, 18};
+        s.active = {Piece::T, 0, 3, 18};
         Events e;
-        const unsigned cap = preset == Preset::fusion ? 8u : 15u,
-                       delay = preset == Preset::fusion ? 18u : 30u;
+        const unsigned cap = 15u, delay = 30u;
         REQUIRE(step(s, 0));
         for (unsigned n = 0; n < cap; ++n) {
             REQUIRE(step(s, n % 2 ? left : right, &e));
@@ -511,5 +518,209 @@ TEST_CASE("One hundred seeds resume identical modern and Fusion traces") {
         }
         REQUIRE(a == b);
         REQUIRE(state_hash(a) == state_hash(b));
+    }
+}
+
+TEST_CASE("Soft drop transitions never spend stored gravity as a burst") {
+    for (auto preset : {Preset::fusion, Preset::modern})
+        for (unsigned start = 0; start <= (preset == Preset::fusion ? 29u : 20u); ++start) {
+            auto base = initial_state(1, preset, preset == Preset::fusion ? start : 0);
+            if (preset == Preset::modern)
+                base.lines = start * 10;
+            base.active = {Piece::O, 0, 3, 0};
+            const auto interval = gravity_interval(base);
+            for (unsigned phase = 0; phase < interval; ++phase) {
+                auto s = base;
+                s.gravity_timer = phase;
+                for (unsigned tick = 0; tick < 8; ++tick) {
+                    const auto before = s.active.y;
+                    const auto score = s.score;
+                    Events e;
+                    REQUIRE(step(s, tick % 3 == 1 ? 0u : down, &e));
+                    REQUIRE(s.active.y >= before);
+                    REQUIRE(s.active.y <= before + 1);
+                    REQUIRE(s.score <= score + 1);
+                    REQUIRE_FALSE(e.locked);
+                    REQUIRE_FALSE(e.hard_dropped);
+                }
+            }
+        }
+}
+TEST_CASE("Fusion draws the Classic stream with one next and visible spawns") {
+    constexpr std::array<Piece, 7> mapping{
+        Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
+    for (unsigned seed : {0u, 1u, 7u, 49u, 0xffffffffu}) {
+        auto classic = stackpulse::classic::initial_state(seed);
+        auto s = initial_state(seed, Preset::fusion);
+        for (unsigned n = 0; n < 100; ++n) {
+            REQUIRE(s.active.piece == mapping[static_cast<unsigned>(classic.active.piece)]);
+            REQUIRE(s.next[0] == mapping[static_cast<unsigned>(classic.next)]);
+            REQUIRE(s.rng == classic.rng);
+            for (unsigned i = 1; i < s.next.size(); ++i)
+                REQUIRE(s.next[i] == Piece::I);
+            for (auto c : cells(s.active))
+                REQUIRE(c.y >= 0);
+            // Remove stack after each actual lock so stream comparison reaches 100 draws.
+            s.board.fill(0);
+            REQUIRE(step(s, hard_drop));
+            s.board.fill(0);
+            REQUIRE(step(s, 0));
+            classic.board.fill(0);
+            classic.active.y = 15;
+            stackpulse::classic::Events e;
+            do {
+                REQUIRE(stackpulse::classic::step(classic, stackpulse::classic::down, &e));
+            } while (!e.spawned);
+            REQUIRE_FALSE(classic.game_over);
+        }
+    }
+}
+TEST_CASE("Fusion level thresholds and speed match Classic for every start level") {
+    for (unsigned start = 0; start <= 29; ++start)
+        for (unsigned lines = 0; lines <= 400; ++lines) {
+            auto s = initial_state(1, Preset::fusion, start);
+            s.lines = lines;
+            const auto expected = stackpulse::classic::level_for_lines(start, lines);
+            REQUIRE(level(s) == expected);
+            REQUIRE(gravity_interval(s) == stackpulse::classic::gravity_frames(expected));
+        }
+}
+TEST_CASE("Fusion locks non T pieces on the Classic downward attempt but preserves T time") {
+    for (auto piece : {Piece::I, Piece::J, Piece::L, Piece::O, Piece::S, Piece::Z}) {
+        auto s = initial_state(1, Preset::fusion);
+        s.active = {piece, 0, 3, 0};
+        s.active = ghost(s);
+        s.gravity_timer = gravity_interval(s) - 1;
+        Events e;
+        REQUIRE(step(s, 0, &e));
+        REQUIRE(e.locked);
+        REQUIRE(e.spawned);
+        REQUIRE_FALSE(e.hard_dropped);
+    }
+    auto s = initial_state(1, Preset::fusion);
+    s.active = {Piece::T, 0, 3, 18};
+    Events e;
+    for (unsigned tick = 0; tick < 29; ++tick) {
+        REQUIRE(step(s, 0, &e));
+        REQUIRE_FALSE(e.locked);
+    }
+    REQUIRE(step(s, 0, &e));
+    REQUIRE(e.locked);
+}
+TEST_CASE("Fusion Classic clear values and all clear bonus scale with the level") {
+    constexpr std::array<unsigned, 5> points{0, 40, 100, 300, 1200};
+    for (unsigned start : {0u, 5u, 19u})
+        for (unsigned rows = 1; rows <= 4; ++rows) {
+            auto s = initial_state(1, Preset::fusion, start);
+            for (unsigned r = 0; r < rows; ++r)
+                for (unsigned x = 0; x < 10; ++x)
+                    if (x != 4)
+                        s.board[(39 - r) * 10 + x] = 8;
+            s.board[350] = 8;
+            s.active = {Piece::I, 1, 2, 16};
+            Events e;
+            REQUIRE(step(s, hard_drop, &e));
+            REQUIRE(e.cleared == rows);
+            REQUIRE(s.score == points[rows] * (start + 1));
+        }
+    for (auto preset : {Preset::modern, Preset::fusion}) {
+        auto s = initial_state(1, preset);
+        for (unsigned x = 0; x < 10; ++x)
+            if (x < 3 || x > 6)
+                s.board[390 + x] = 8;
+        s.active = {Piece::I, 0, 3, 18};
+        Events e;
+        REQUIRE(step(s, hard_drop, &e));
+        REQUIRE(e.perfect_clear);
+        REQUIRE(s.score == (preset == Preset::fusion ? 2040 : 2100));
+    }
+}
+TEST_CASE("Version two snapshots retain Fusion start level hold and timers") {
+    auto s = initial_state(49, Preset::fusion, 19);
+    REQUIRE(step(s, hold));
+    REQUIRE(step(s, left));
+    REQUIRE(enqueue(s, {19, s.tick, s.tick + 30, 2, 5, 8}));
+    auto bytes = canonical_bytes(s);
+    REQUIRE(bytes[0] == 2);
+    State restored;
+    REQUIRE(decode_state(bytes, restored));
+    REQUIRE(restored == s);
+    REQUIRE(restored.start_level == 19);
+    bytes[0] = 1;
+    REQUIRE_FALSE(decode_state(bytes, restored));
+    REQUIRE(restored == s);
+    s.start_level = 30;
+    REQUIRE_FALSE(valid_state(s));
+}
+
+TEST_CASE("Modern repeat cadence leaves three ticks between horizontal shifts") {
+    auto s = initial_state(1);
+    s.active = {Piece::O, 0, 4, 0};
+    REQUIRE(step(s, left));
+    for (unsigned tick = 1; tick <= 16; ++tick) {
+        Events e;
+        REQUIRE(step(s, left, &e));
+        REQUIRE(e.shifted == (tick == 10 || tick == 13 || tick == 16));
+    }
+}
+TEST_CASE("Hard drop is edge triggered and awards two points per descended row") {
+    for (auto preset : {Preset::fusion, Preset::modern}) {
+        auto s = initial_state(1, preset);
+        s.active = {Piece::O, 0, 3, 0};
+        const auto distance = ghost(s).y - s.active.y;
+        Events e;
+        REQUIRE(step(s, hard_drop, &e));
+        REQUIRE(e.hard_dropped);
+        REQUIRE(e.locked);
+        REQUIRE(s.score == static_cast<std::uint64_t>(distance * 2));
+        REQUIRE(e.score_delta == s.score);
+        REQUIRE(step(s, hard_drop, &e));
+        REQUIRE_FALSE(e.hard_dropped);
+        REQUIRE_FALSE(e.locked);
+        REQUIRE(step(s, 0));
+        REQUIRE(step(s, hard_drop, &e));
+        REQUIRE(e.hard_dropped);
+        REQUIRE(e.locked);
+    }
+}
+
+TEST_CASE("Fusion grounded non T waits a full Classic gravity interval in a valid state") {
+    for (bool landing_first : {false, true}) {
+        auto s = initial_state(1, Preset::fusion);
+        s.active = {Piece::O, 0, 3, landing_first ? 17 : 18};
+        Events e;
+        const auto interval = gravity_interval(s);
+        if (landing_first) {
+            s.gravity_timer = interval - 1;
+            REQUIRE(step(s, 0, &e));
+            REQUIRE(s.active.y == 18);
+            REQUIRE_FALSE(e.locked);
+            REQUIRE(valid_state(s));
+        }
+        for (unsigned tick = 1; tick <= interval; ++tick) {
+            REQUIRE(step(s, 0, &e));
+            REQUIRE(valid_state(s));
+            REQUIRE(e.locked == (tick == interval));
+        }
+    }
+}
+TEST_CASE("Fusion O gravity and lock trajectory matches Classic exactly") {
+    for (unsigned start : {0u, 9u, 19u, 29u}) {
+        auto s = initial_state(1, Preset::fusion, start);
+        auto c = stackpulse::classic::initial_state(1, start);
+        s.active = {Piece::O, 0, 3, 0};
+        c.active = {stackpulse::classic::Piece::O, 0, 3, 0};
+        for (unsigned tick = 0; tick < 1000; ++tick) {
+            Events modern_event;
+            stackpulse::classic::Events classic_event;
+            REQUIRE(step(s, 0, &modern_event));
+            REQUIRE(stackpulse::classic::step(c, 0, &classic_event));
+            REQUIRE(modern_event.locked == classic_event.locked);
+            if (modern_event.locked)
+                break;
+            REQUIRE(s.active.y == c.active.y);
+            REQUIRE(s.gravity_timer == c.gravity_timer);
+            REQUIRE(tick + 1 < 1000);
+        }
     }
 }
