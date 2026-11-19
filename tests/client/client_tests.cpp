@@ -201,3 +201,28 @@ TEST_CASE("Replay save exceptions retain the snapshot for serialized retry", "[c
     REQUIRE(saves.dirty());
     REQUIRE_FALSE(saves.ready_to_load());
 }
+
+TEST_CASE("Accepted holds select store or retrieval cues in both presets",
+          "[client][audio][hold]") {
+    namespace modern = stackpulse::modern;
+    for (auto preset : {modern::Preset::fusion, modern::Preset::modern}) {
+        auto state = modern::initial_state(19, preset);
+        modern::Events events;
+        const bool initially_occupied = state.has_hold;
+        modern::step(state, modern::hold, &events);
+        REQUIRE(client::hold_cue(events.held, initially_occupied) == client::Cue::hold_store);
+        REQUIRE(state.has_hold);
+        modern::step(state, 0, &events);
+        modern::step(state, modern::hold, &events);
+        REQUIRE_FALSE(client::hold_cue(events.held, state.has_hold));
+
+        // Model the next piece's reset without depending on preset-specific lock timing.
+        state.hold_used = false;
+        modern::step(state, 0, &events);
+        const bool previously_occupied = state.has_hold;
+        modern::step(state, modern::hold, &events);
+        REQUIRE(client::hold_cue(events.held, previously_occupied) == client::Cue::hold_retrieve);
+    }
+    REQUIRE_FALSE(client::hold_cue(false, false));
+    REQUIRE_FALSE(client::hold_cue(false, true));
+}

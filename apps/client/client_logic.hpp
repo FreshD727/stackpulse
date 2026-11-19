@@ -148,8 +148,17 @@ enum class Cue : std::size_t {
     hard_drop,
     spin_single,
     spin_double,
-    spin_triple
+    spin_triple,
+    hold_store,
+    hold_retrieve
 };
+
+// Only an accepted hold emits a cue; occupancy must be sampled before stepping.
+constexpr std::optional<Cue> hold_cue(bool accepted, bool previously_occupied) {
+    if (!accepted)
+        return std::nullopt;
+    return previously_occupied ? Cue::hold_retrieve : Cue::hold_store;
+}
 
 constexpr std::optional<Cue> clear_cue(unsigned lines, bool spin = false) {
     if (spin && lines >= 1 && lines <= 3)

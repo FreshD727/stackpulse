@@ -28,6 +28,24 @@ inline Tone four_line_tone() {
     return tone;
 }
 
+inline Tone hold_tone(bool retrieving) {
+    Tone tone;
+    tone.length = 4320;
+    // Store descends into the slot; retrieval answers with the same two notes rising.
+    constexpr std::array<float, 2> notes{440.F, 659.25F};
+    const auto note_length = tone.length / notes.size();
+    float phase = 0.F;
+    for (std::size_t i = 0; i < tone.length; ++i) {
+        const auto note = i / note_length, position = i % note_length;
+        const auto pitch = retrieving ? note : notes.size() - 1 - note;
+        const float progress = static_cast<float>(position) / static_cast<float>(note_length - 1);
+        const float attack = std::min(1.F, static_cast<float>(position) / 96.F);
+        phase += 6.28318530718F * notes[pitch] / static_cast<float>(sample_rate);
+        tone.samples[i] = .045F * attack * (1.F - progress) * std::sin(phase);
+    }
+    return tone;
+}
+
 inline Tone spin_tone(unsigned tier) {
     Tone tone;
     tier = std::clamp(tier, 1U, 3U);

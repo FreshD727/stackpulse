@@ -38,9 +38,14 @@ TEST_CASE("Spin cues use bass percussion distinct from the four-clear melody", "
     }
 }
 
-TEST_CASE("Synthesized clear and spin voices remain short quiet and tapered", "[client][audio]") {
-    for (const auto& tone :
-         {audio::four_line_tone(), audio::spin_tone(1), audio::spin_tone(2), audio::spin_tone(3)}) {
+TEST_CASE("Synthesized clear spin and hold voices remain short quiet and tapered",
+          "[client][audio]") {
+    for (const auto& tone : {audio::four_line_tone(),
+                             audio::spin_tone(1),
+                             audio::spin_tone(2),
+                             audio::spin_tone(3),
+                             audio::hold_tone(false),
+                             audio::hold_tone(true)}) {
         REQUIRE(tone.length <= tone.samples.size());
         REQUIRE(tone.length <= static_cast<std::size_t>(audio::sample_rate * .26));
         REQUIRE(tone.samples.front() == 0.F);
@@ -53,4 +58,23 @@ TEST_CASE("Synthesized clear and spin voices remain short quiet and tapered", "[
         for (std::size_t i = tone.length; i < tone.samples.size(); ++i)
             REQUIRE(tone.samples[i] == 0.F);
     }
+}
+
+TEST_CASE("Hold store and retrieval use distinct opposing note orders", "[client][audio][hold]") {
+    const auto store = audio::hold_tone(false);
+    const auto retrieve = audio::hold_tone(true);
+    REQUIRE(store.length == retrieve.length);
+    REQUIRE(energy(store) > 0.);
+    REQUIRE(energy(retrieve) > 0.);
+    REQUIRE(store.samples != retrieve.samples);
+    const auto half = store.length / 2;
+    auto crossings = [half](const audio::Tone& tone, std::size_t start) {
+        unsigned count = 0;
+        for (std::size_t i = start + 1; i < start + half; ++i)
+            if (tone.samples[i - 1] < 0.F && tone.samples[i] >= 0.F)
+                ++count;
+        return count;
+    };
+    REQUIRE(crossings(store, 0) > crossings(store, half));
+    REQUIRE(crossings(retrieve, 0) < crossings(retrieve, half));
 }

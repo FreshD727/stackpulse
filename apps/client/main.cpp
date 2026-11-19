@@ -143,6 +143,7 @@ int main(int argc, char** argv) {
     int smoke_frames = 0;
     bool smoke_play = false, smoke_settings = false, force_sticks = false, muted_audio = false;
     std::filesystem::path data_directory, verify_path, capture_path;
+    bool smoke_spin_debug = false;
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
@@ -166,6 +167,8 @@ int main(int argc, char** argv) {
             smoke_settings = true;
         else if (arg == "--data-dir" && i + 1 < argc)
             data_directory = argv[++i];
+        else if (arg == "--spin-debug")
+            smoke_spin_debug = true;
         else if (arg == "--smoke-play")
             smoke_play = true;
         else if (arg == "--sticks")
@@ -183,11 +186,13 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
-                         "[--smoke-settings] [--capture FILE.bmp] "
+                         "[--smoke-settings] [--spin-debug] [--capture FILE.bmp] "
                          "[--verify FILE]\n");
             return 2;
         }
     }
+    if (smoke_spin_debug && mode == 0)
+        mode = 1;
     if (!verify_path.empty()) {
         mr::Replay modern_value;
         modern::State modern_final;
@@ -279,6 +284,8 @@ int main(int argc, char** argv) {
     std::uint64_t late = 0, overload = 0;
     int frames = 0, selection = 0, settings_row = 0, capture = -1;
     bool running = true, focused = true, practice = false, playback = false, step_once = false;
+    bool spin_debug = false, spin_debug_history = false;
+    std::uint8_t spin_debug_rotation = 0;
     Screen screen = Screen::home, settings_return = Screen::home;
     game::State state = game::initial_state(1);
     modern::State modern_state = modern::initial_state(1);
@@ -359,6 +366,7 @@ int main(int argc, char** argv) {
     auto start = [&](bool lab, bool fixture) {
         if (!save_recording())
             return;
+        spin_debug = false;
         practice = lab;
         playback = false;
         step_once = false;
@@ -427,7 +435,8 @@ int main(int argc, char** argv) {
             (code == SDL_SCANCODE_UP || code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_F1 ||
              code == SDL_SCANCODE_F2 || code == SDL_SCANCODE_F3 || code == SDL_SCANCODE_F4 ||
              code == SDL_SCANCODE_F5 || code == SDL_SCANCODE_F6 || code == SDL_SCANCODE_F7 ||
-             code == SDL_SCANCODE_F8 || code == SDL_SCANCODE_F9 || code == SDL_SCANCODE_F10)) {
+             code == SDL_SCANCODE_F8 || code == SDL_SCANCODE_F9 || code == SDL_SCANCODE_F10 ||
+             code == SDL_SCANCODE_F11 || code == SDL_SCANCODE_F12)) {
             notice = "RESERVED MENU / PRACTICE KEY";
             return;
         }
@@ -570,12 +579,19 @@ int main(int argc, char** argv) {
     };
     if (smoke_play)
         start(true, true);
+    if (smoke_spin_debug) {
+        start(true, true);
+        spin_debug = true;
+        spin_debug_rotation = modern_state.active.rotation;
+        spin_debug_history = modern_state.last_rotation;
+        notice = "SPIN INSPECTOR / SIMULATION FROZEN";
+    }
     if (smoke_settings)
         screen = Screen::settings;
     std::printf("Stackpulse independent provisional presets; prefs=%s\n",
                 directory.string().c_str());
     auto previous_frame_time = SDL_GetTicksNS();
-    bool previous_frame_playing = screen == Screen::play;
+    bool previous_frame_playing = screen == Screen::play && !spin_debug;
     while (running) {
         const auto frame_time = SDL_GetTicksNS();
         // Paused/menu time is not simulation debt when play resumes.
@@ -633,6 +649,32 @@ int main(int argc, char** argv) {
                         notice = "REMAP CANCELLED";
                     } else
                         remap(code, false);
+                    break;
+                }
+                if (event.key.down && practice && mode && !playback &&
+                    (screen == Screen::play || screen == Screen::pause) &&
+                    code == SDL_SCANCODE_F11) {
+                    spin_debug = !spin_debug;
+                    if (spin_debug) {
+                        spin_debug_rotation = modern_state.active.rotation;
+                        spin_debug_history = modern_state.last_rotation;
+                    }
+                    release(event.key.timestamp);
+                    notice =
+                        spin_debug ? "SPIN INSPECTOR / SIMULATION FROZEN" : "SPIN INSPECTOR CLOSED";
+                    break;
+                }
+                if (spin_debug) {
+                    if (event.key.down && code == SDL_SCANCODE_F12) {
+                        if (event.key.mod & SDL_KMOD_SHIFT)
+                            spin_debug_history = !spin_debug_history;
+                        else
+                            spin_debug_rotation = (spin_debug_rotation + 1) % 4;
+                    } else if (event.key.down && code == SDL_SCANCODE_ESCAPE) {
+                        spin_debug = false;
+                        release(event.key.timestamp);
+                        notice = "SPIN INSPECTOR CLOSED";
+                    }
                     break;
                 }
                 if (event.key.down) {
@@ -718,6 +760,8 @@ int main(int argc, char** argv) {
                         remap(code, true);
                     break;
                 }
+                if (spin_debug)
+                    break;
                 if (event.gbutton.down) {
                     if (code == SDL_GAMEPAD_BUTTON_BACK ||
                         (map_action(code, true) == in::Action::pause &&
@@ -751,8 +795,8 @@ int main(int argc, char** argv) {
                 break;
             }
             case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-                if (screen == Screen::play && !playback && focused && settings.sticks &&
-                    event.gaxis.axis <= SDL_GAMEPAD_AXIS_LEFTY)
+                if (screen == Screen::play && !spin_debug && !playback && focused &&
+                    settings.sticks && event.gaxis.axis <= SDL_GAMEPAD_AXIS_LEFTY)
                     if (auto found = pads.find(event.gaxis.which); found != pads.end()) {
                         const int direction = found->second.axes[event.gaxis.axis].update(
                             static_cast<float>(event.gaxis.value) / 32768.F);
@@ -779,7 +823,7 @@ int main(int argc, char** argv) {
                 break;
             }
         }
-        audio.set_playing(screen == Screen::play);
+        audio.set_playing(screen == Screen::play && !spin_debug);
         const auto now = SDL_GetTicksNS();
         int catchup = 0;
         while (tick_boundary(ticks + 1) <= now && catchup < 8) {
@@ -797,7 +841,7 @@ int main(int argc, char** argv) {
                 if (timeline.size() > 4)
                     timeline.pop_back();
             }
-            if (screen == Screen::play && (!state.game_over || playback)) {
+            if (screen == Screen::play && !spin_debug && (!state.game_over || playback)) {
                 std::uint32_t mask = 0;
                 for (std::size_t i = 0; i < 5; ++i)
                     if (sample.held[static_cast<std::size_t>(actions[i])])
@@ -827,6 +871,7 @@ int main(int argc, char** argv) {
                 }
                 game::Events events;
                 modern::Events modern_events;
+                const bool before_has_hold = modern_state.has_hold;
                 const bool stepped = mode ? modern::step(modern_state, mask, &modern_events)
                                           : game::step(state, mask, &events);
                 if (mode) {
@@ -840,6 +885,9 @@ int main(int argc, char** argv) {
                     screen = Screen::pause;
                     notice = "INVALID STATE / SIMULATION STOPPED";
                 } else {
+                    if (mode)
+                        if (const auto cue = client::hold_cue(modern_events.held, before_has_hold))
+                            audio.play(*cue);
                     if (events.shifted)
                         audio.play(ClientAudio::Cue::shift);
                     if (events.soft_dropped)
@@ -882,8 +930,8 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        previous_frame_playing = screen == Screen::play;
-        audio.set_playing(screen == Screen::play);
+        previous_frame_playing = screen == Screen::play && !spin_debug;
+        audio.set_playing(screen == Screen::play && !spin_debug);
         const bool behind = tick_boundary(ticks + 1) <= now;
         if (behind)
             ++overload;
@@ -917,7 +965,7 @@ int main(int argc, char** argv) {
                  382,
                  119,
                  mode == 2   ? "FIVE NEXT / HOLD / GHOST"
-                 : mode == 1 ? "ONE NEXT / HOLD"
+                 : mode == 1 ? "FIVE NEXT / HOLD"
                              : "ONE NEXT PIECE",
                  mint);
             text(renderer,
@@ -994,7 +1042,7 @@ int main(int argc, char** argv) {
                                   : static_cast<game::Piece>(value <= 7 ? value - 1 : 0),
                               palette_speed);
                 }
-            if (mode && !state.game_over) {
+            if (mode && !state.game_over && !spin_debug) {
                 if (mode == 2)
                     for (auto c : modern::cells(modern::ghost(modern_state)))
                         if (c.y >= 0) {
@@ -1032,7 +1080,7 @@ int main(int argc, char** argv) {
             text(renderer, 20, 283, number(state.tick));
             text(renderer, 320, 66, "NEXT", mint);
             if (mode) {
-                for (int i = 0; i < (mode == 2 ? 5 : 1); ++i) {
+                for (int i = 0; i < 5; ++i) {
                     modern::Active preview{
                         modern_state.next[i],
                         modern::spawn_rotation(modern_state.next[i], modern_state.preset),
@@ -1066,7 +1114,81 @@ int main(int argc, char** argv) {
                 for (auto c : game::cells(preview))
                     block(renderer, 320 + c.x * 14.F, 85 + c.y * 14.F, state.next, palette_speed);
             }
-            if (screen == Screen::pause) {
+            if (spin_debug && practice && mode) {
+                const auto positions = modern::enumerate_spin_positions(
+                    modern_state, spin_debug_rotation, spin_debug_history);
+                constexpr SDL_Color completed{255, 205, 92, 255}, cw{72, 218, 255, 255},
+                    ccw{245, 117, 220, 255}, multiple{255, 255, 255, 255};
+                std::size_t hidden = 0;
+                for (const auto& position : positions) {
+                    const auto& reason = position.reason;
+                    const auto marker_count = static_cast<unsigned>(reason.already_spin) +
+                                              static_cast<unsigned>(reason.cw) +
+                                              static_cast<unsigned>(reason.ccw);
+                    const auto tint = marker_count > 1      ? multiple
+                                      : reason.already_spin ? completed
+                                      : reason.cw           ? cw
+                                                            : ccw;
+                    bool visible = false;
+                    color(renderer, tint);
+                    for (const auto c : modern::cells(position.active)) {
+                        if (c.y < 0)
+                            continue;
+                        visible = true;
+                        SDL_FRect outline{
+                            bx + c.x * cell + 3, by + c.y * cell + 3, cell - 6, cell - 6};
+                        SDL_RenderRect(renderer, &outline);
+                    }
+                    if (!visible)
+                        ++hidden;
+                    // A small square marks the local origin; a cross marks the T pivot.
+                    const auto& a = position.active;
+                    if (a.x >= 0 && a.y >= 0)
+                        rect(renderer, bx + a.x * cell + 1, by + a.y * cell + 1, 3, 3, tint);
+                    if (a.y + 1 >= 0) {
+                        const float px = bx + (a.x + 1.5F) * cell;
+                        const float py = by + (a.y + 1.5F) * cell;
+                        rect(renderer, px - 3, py - 1, 6, 2, tint);
+                        rect(renderer, px - 1, py - 3, 2, 6, tint);
+                    }
+                }
+                text(renderer, 382, 65, "SPIN INSPECTOR / FROZEN", mint);
+                text(renderer, 382, 83, "F11 / ESC CLOSE", muted);
+                text(renderer, 382, 101, "F12 ORIENTATION: " + number(spin_debug_rotation));
+                text(renderer,
+                     382,
+                     119,
+                     std::string("SHIFT+F12 LAST ROT: ") + (spin_debug_history ? "YES" : "NO"));
+                text(renderer,
+                     382,
+                     137,
+                     "ACCEPTED " + number(positions.size()) + " / HIDDEN " + number(hidden),
+                     mint);
+                text(renderer, 382, 157, "COMPLETED SPIN", completed);
+                text(renderer, 382, 173, "CW FIRST OPEN KICK", cw);
+                text(renderer, 382, 189, "CCW FIRST OPEN KICK", ccw);
+                text(renderer, 382, 205, "MULTIPLE REASONS", multiple);
+                text(renderer, 382, 223, "SQUARE ORIGIN / + PIVOT", muted);
+                text(renderer, 382, 239, "SOLID = BOARD BLOCKERS", muted);
+                const auto actual = modern::spin_possibility(modern_state);
+                text(renderer,
+                     382,
+                     260,
+                     std::string("ACTUAL ACTIVE: ") + (actual.possible() ? "YES" : "NO"),
+                     mint);
+                text(renderer,
+                     382,
+                     276,
+                     "DONE " + number(actual.already_spin) + " CW " + number(actual.cw) + " CCW " +
+                         number(actual.ccw));
+                text(renderer,
+                     382,
+                     292,
+                     std::string("ACTUAL LAST ROT: ") + (modern_state.last_rotation ? "YES" : "NO"),
+                     muted);
+                text(renderer, 382, 310, "LEGAL POSES; NO PATH TEST", muted);
+                text(renderer, 382, 326, "LIVE ACTIVE FILL HIDDEN", muted);
+            } else if (screen == Screen::pause) {
                 text(renderer, 414, 65, state.game_over ? "GAME OVER" : "PAUSED", mint);
                 constexpr std::array<const char*, 7> menu{"RESUME",
                                                           "RESTART SEED",
@@ -1123,7 +1245,7 @@ int main(int argc, char** argv) {
                          modern_state.back_to_back ? "BACK TO BACK" : "B2B READY",
                          muted);
                     if (practice)
-                        text(renderer, 320, 329, "F7/8/9 SPIN 1/2/3  F10 GARBAGE", muted);
+                        text(renderer, 320, 329, "F7-9 SPIN F10 GARB F11 VIEW", muted);
                 }
             }
             if (practice && !mode) {

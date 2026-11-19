@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
+#include <vector>
 
 // Original, quiet cues synthesized locally; no external audio assets or music.
 // The main thread creates voices under the stream lock; the callback advances
@@ -39,6 +40,10 @@ class ClientAudio {
             stackpulse::client::audio::spin_tone(2);
         tones_[static_cast<std::size_t>(Cue::spin_triple)] =
             stackpulse::client::audio::spin_tone(3);
+        tones_[static_cast<std::size_t>(Cue::hold_store)] =
+            stackpulse::client::audio::hold_tone(false);
+        tones_[static_cast<std::size_t>(Cue::hold_retrieve)] =
+            stackpulse::client::audio::hold_tone(true);
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             unavailable();
             return;
@@ -52,7 +57,7 @@ class ClientAudio {
             return;
         }
         std::printf("Audio: synthesized movement / soft drop / hard drop / rotation / clear / spin "
-                    "tiers\n");
+                    "tiers / hold store / hold retrieval\n");
     }
 
     void set_playing(bool playing) {
@@ -103,7 +108,9 @@ class ClientAudio {
         std::size_t tone{}, position{};
         bool active{};
     };
-    std::array<Tone, 9> tones_{};
+    // Keep the immutable PCM bank off the small Windows main-thread stack.
+    // It is allocated once before the audio callback starts and never resized.
+    std::vector<Tone> tones_ = std::vector<Tone>(static_cast<std::size_t>(Cue::hold_retrieve) + 1);
     std::array<Voice, 8> voices_{};
     std::size_t next_voice_{};
     SDL_AudioStream* stream_{};
