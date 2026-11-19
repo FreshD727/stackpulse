@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 namespace stackpulse::modern {
-inline constexpr std::uint32_t rules_version = 3, action_mask = 255;
+inline constexpr std::uint32_t rules_version = 4, action_mask = 255;
 enum class Preset : std::uint8_t { fusion, modern };
 enum Action : std::uint32_t {
     left = 1,
@@ -66,7 +66,23 @@ initial_state(std::uint32_t seed, Preset preset = Preset::modern, std::uint32_t 
 bool rotate(State&, bool clockwise) noexcept;
 [[nodiscard]] std::uint8_t spawn_rotation(Piece, Preset) noexcept;
 // Completed spin or one actual CW/CCW first-success kick reaches a grounded 3-corner pose.
+struct SpinPossibility {
+    bool already_spin{}, cw{}, ccw{};
+    [[nodiscard]] bool possible() const noexcept {
+        return already_spin || cw || ccw;
+    }
+    bool operator==(const SpinPossibility&) const = default;
+};
+struct SpinPosition {
+    Active active;
+    SpinPossibility reason;
+};
+[[nodiscard]] SpinPossibility spin_possibility(const State&) noexcept;
 [[nodiscard]] bool spin_possible(const State&) noexcept;
+// All legal T poses in the 10x40 board, including hidden rows. Pure diagnostic;
+// supplied rotation and history assumption do not change the live state.
+[[nodiscard]] std::vector<SpinPosition>
+enumerate_spin_positions(const State&, std::uint8_t rotation, bool last_rotation);
 bool step(State&, std::uint32_t held, Events* events = nullptr);
 // Arrival is authoritative/practice input; duplicates are idempotent, max 256 pending.
 bool enqueue(State&, const Packet&);

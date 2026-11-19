@@ -546,7 +546,7 @@ TEST_CASE("Soft drop transitions never spend stored gravity as a burst") {
             }
         }
 }
-TEST_CASE("Fusion draws the Classic stream with one next and visible spawns") {
+TEST_CASE("Fusion draws the Classic stream with five next and visible spawns") {
     constexpr std::array<Piece, 7> mapping{
         Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
     for (unsigned seed : {0u, 1u, 7u, 49u, 0xffffffffu}) {
@@ -555,9 +555,22 @@ TEST_CASE("Fusion draws the Classic stream with one next and visible spawns") {
         for (unsigned n = 0; n < 100; ++n) {
             REQUIRE(s.active.piece == mapping[static_cast<unsigned>(classic.active.piece)]);
             REQUIRE(s.next[0] == mapping[static_cast<unsigned>(classic.next)]);
-            REQUIRE(s.rng == classic.rng);
-            for (unsigned i = 1; i < s.next.size(); ++i)
-                REQUIRE(s.next[i] == Piece::I);
+            auto future = classic;
+            for (unsigned i = 0; i < s.next.size(); ++i) {
+                REQUIRE(s.next[i] == mapping[static_cast<unsigned>(future.next)]);
+                future.board.fill(0);
+                future.active.y = 15;
+                stackpulse::classic::Events advanced;
+                do {
+                    REQUIRE(
+                        stackpulse::classic::step(future, stackpulse::classic::down, &advanced));
+                } while (!advanced.spawned);
+            }
+            const auto occupied_cells = cells(s.active);
+            REQUIRE(
+                std::min_element(occupied_cells.begin(), occupied_cells.end(), [](auto a, auto b) {
+                    return a.y < b.y;
+                })->y == 0);
             for (auto c : cells(s.active))
                 REQUIRE(c.y >= 0);
             // Remove stack after each actual lock so stream comparison reaches 100 draws.
@@ -634,18 +647,18 @@ TEST_CASE("Fusion Classic clear values and all clear bonus scale with the level"
         REQUIRE(s.score == (preset == Preset::fusion ? 2040 : 2100));
     }
 }
-TEST_CASE("Version three snapshots retain Fusion start level hold and timers") {
+TEST_CASE("Version four snapshots retain Fusion start level hold and timers") {
     auto s = initial_state(49, Preset::fusion, 19);
     REQUIRE(step(s, hold));
     REQUIRE(step(s, left));
     REQUIRE(enqueue(s, {19, s.tick, s.tick + 30, 2, 5, 8}));
     auto bytes = canonical_bytes(s);
-    REQUIRE(bytes[0] == 3);
+    REQUIRE(bytes[0] == 4);
     State restored;
     REQUIRE(decode_state(bytes, restored));
     REQUIRE(restored == s);
     REQUIRE(restored.start_level == 19);
-    for (auto older : {1u, 2u}) {
+    for (auto older : {1u, 2u, 3u}) {
         bytes[0] = static_cast<std::uint8_t>(older);
         REQUIRE_FALSE(decode_state(bytes, restored));
         REQUIRE(restored == s);
@@ -758,8 +771,8 @@ TEST_CASE("Fusion wall charge tuck retries and matches Classic every active tick
             REQUIRE(s.das_timer == 10);
     }
 }
-TEST_CASE("Fusion spawn and hold use Classic flipped TJL geometry") {
-    for (auto piece : {Piece::T, Piece::J, Piece::L}) {
+TEST_CASE("Fusion spawn and hold match every Classic shape at visible row zero") {
+    for (auto piece : {Piece::I, Piece::J, Piece::L, Piece::O, Piece::S, Piece::T, Piece::Z}) {
         auto s = initial_state(1, Preset::fusion);
         s.next[0] = piece;
         s.gravity_timer = 24;
@@ -770,7 +783,7 @@ TEST_CASE("Fusion spawn and hold use Classic flipped TJL geometry") {
         Events e;
         REQUIRE(step(s, hold, &e));
         REQUIRE(e.held);
-        REQUIRE(s.active.rotation == 2);
+        REQUIRE(s.active.rotation == spawn_rotation(piece, Preset::fusion));
         REQUIRE(s.active.piece == piece);
         REQUIRE(s.gravity_timer == 0);
         REQUIRE(s.lock_elapsed == 0);
@@ -779,12 +792,23 @@ TEST_CASE("Fusion spawn and hold use Classic flipped TJL geometry") {
         REQUIRE(s.last_kick == 0);
         REQUIRE(spawn_rotation(piece, Preset::modern) == 0);
         auto actual = cells(s.active);
-        const auto cp = piece == Piece::T   ? stackpulse::classic::Piece::T
-                        : piece == Piece::J ? stackpulse::classic::Piece::J
-                                            : stackpulse::classic::Piece::L;
+        constexpr std::array<stackpulse::classic::Piece, 7> classic_piece{
+            stackpulse::classic::Piece::I,
+            stackpulse::classic::Piece::J,
+            stackpulse::classic::Piece::L,
+            stackpulse::classic::Piece::O,
+            stackpulse::classic::Piece::S,
+            stackpulse::classic::Piece::T,
+            stackpulse::classic::Piece::Z};
+        const auto cp = classic_piece[static_cast<unsigned>(piece)];
         auto expected =
             stackpulse::classic::cells({cp, stackpulse::classic::spawn_rotation(cp), 3, 0});
-        // Classic flipped shapes occupy the same translated local geometry.
+        // Compare occupied Classic geometry translated so its topmost cell is visible row zero.
+        const auto top = std::min_element(expected.begin(), expected.end(), [](auto a, auto b) {
+                             return a.y < b.y;
+                         })->y;
+        for (auto& c : expected)
+            c.y -= top;
         auto sort = [](auto& cells) {
             std::sort(cells.begin(), cells.end(), [](auto a, auto b) {
                 return a.y < b.y || (a.y == b.y && a.x < b.x);
@@ -882,4 +906,126 @@ TEST_CASE("Fusion completed spin respects the delay cap and failed actions canno
     REQUIRE(e.locked);
     REQUIRE(e.spin);
     REQUIRE(e.cleared == 3);
+}
+
+TEST_CASE("Fusion five preview queue consumes only empty holds and locks") {
+    for (unsigned seed : {0u, 1u, 49u, 0xffffffffu}) {
+        auto expected = initial_state(seed, Preset::fusion);
+        auto s = expected;
+        const auto original = s.active.piece;
+        auto before = s.next;
+        Events e;
+        REQUIRE(step(s, hold, &e));
+        REQUIRE(e.held);
+        REQUIRE(s.held_piece == original);
+        REQUIRE(s.active.piece == before[0]);
+        for (unsigned i = 0; i < 4; ++i)
+            REQUIRE(s.next[i] == before[i + 1]);
+        REQUIRE(step(s, 0));
+        const auto rejected = s.next;
+        const auto rng = s.rng;
+        REQUIRE(step(s, hold, &e));
+        REQUIRE_FALSE(e.held);
+        REQUIRE(s.next == rejected);
+        REQUIRE(s.rng == rng);
+        for (unsigned n = 0; n < 50; ++n) {
+            s.board.fill(0);
+            s.active = ghost(s);
+            s.gravity_timer = gravity_interval(s) - 1;
+            REQUIRE(step(s, down, &e));
+            REQUIRE(e.spawned);
+            s.board.fill(0);
+            REQUIRE(step(s, 0));
+            const auto queue = s.next;
+            const auto draw_state = s.rng;
+            const auto stored = s.held_piece;
+            const auto outgoing = s.active.piece;
+            REQUIRE(step(s, hold, &e));
+            REQUIRE(e.held);
+            REQUIRE(s.active.piece == stored);
+            REQUIRE(s.held_piece == outgoing);
+            REQUIRE(s.next == queue);
+            REQUIRE(s.rng == draw_state);
+            State restored;
+            REQUIRE(decode_state(canonical_bytes(s), restored));
+            REQUIRE(restored == s);
+            REQUIRE(step(s, 0));
+        }
+    }
+}
+
+TEST_CASE("Spin inspector enumerates exactly the gameplay predicate without mutation") {
+    for (auto preset : {Preset::fusion, Preset::modern})
+        for (unsigned rows = 1; rows <= 3; ++rows)
+            for (bool mirrored : {false, true}) {
+                auto board = spin_fixture(7, preset, rows);
+                if (mirrored) {
+                    const auto original = board.board;
+                    for (int y = 0; y < 40; ++y)
+                        for (int x = 0; x < 10; ++x)
+                            board.board[y * 10 + x] = original[y * 10 + 9 - x];
+                }
+                const auto snapshot = board;
+                for (std::uint8_t r = 0; r < 4; ++r)
+                    for (bool history : {false, true}) {
+                        const auto positions = enumerate_spin_positions(board, r, history);
+                        REQUIRE(board == snapshot);
+                        for (int y = -24; y <= 22; ++y)
+                            for (int x = -4; x <= 13; ++x) {
+                                auto candidate = board;
+                                candidate.active = {Piece::T, r, x, y};
+                                candidate.last_rotation = history;
+                                const auto match = std::find_if(
+                                    positions.begin(), positions.end(), [&](const auto& p) {
+                                        return p.active == candidate.active;
+                                    });
+                                REQUIRE((match != positions.end()) == spin_possible(candidate));
+                                if (match != positions.end()) {
+                                    REQUIRE_FALSE(collides(board, match->active));
+                                    REQUIRE(match->reason == spin_possibility(candidate));
+                                    REQUIRE(match->reason.possible());
+                                }
+                            }
+                    }
+                REQUIRE(enumerate_spin_positions(board, 4, false).empty());
+            }
+}
+TEST_CASE("Spin diagnostics expose completed history and actual CW CCW routes") {
+    for (bool cw : {false, true}) {
+        auto s = spin_fixture(7, Preset::fusion, 2);
+        if (!cw) {
+            const auto original = s.board;
+            for (int y = 0; y < 40; ++y)
+                for (int x = 0; x < 10; ++x)
+                    s.board[y * 10 + 9 - x] = original[y * 10 + x];
+            s.active.x = 3;
+        }
+        const auto before = spin_possibility(s);
+        REQUIRE_FALSE(before.already_spin);
+        REQUIRE((cw ? before.cw : before.ccw));
+        REQUIRE(rotate(s, cw));
+        REQUIRE(s.last_kick == 4);
+        REQUIRE(spin_possibility(s).already_spin);
+        const auto positions = enumerate_spin_positions(s, s.active.rotation, true);
+        REQUIRE(std::any_of(positions.begin(), positions.end(), [&](const auto& p) {
+            return p.active == s.active && p.reason.already_spin;
+        }));
+        s.last_rotation = false;
+        REQUIRE_FALSE(spin_possibility(s).already_spin);
+        const auto no_history = enumerate_spin_positions(s, s.active.rotation, false);
+        REQUIRE(std::none_of(no_history.begin(), no_history.end(), [](const auto& p) {
+            return p.reason.already_spin;
+        }));
+        s.active.piece = Piece::I;
+        REQUIRE_FALSE(spin_possibility(s).possible());
+        s.active = {Piece::T, 0, -3, 18};
+        REQUIRE(collides(s, s.active));
+        REQUIRE_FALSE(spin_possibility(s).possible());
+    }
+}
+TEST_CASE("Spin inspector rejects flat ground with either history assumption") {
+    auto s = initial_state(7, Preset::fusion);
+    for (std::uint8_t r = 0; r < 4; ++r)
+        for (bool history : {false, true})
+            REQUIRE(enumerate_spin_positions(s, r, history).empty());
 }

@@ -71,10 +71,6 @@ Piece draw(State& s) {
 }
 Piece take(State& s) {
     const auto p = s.next[0];
-    if (s.preset == Preset::fusion) {
-        s.next[0] = draw(s);
-        return p;
-    }
     std::move(s.next.begin() + 1, s.next.end(), s.next.begin());
     s.next.back() = draw(s);
     return p;
@@ -94,7 +90,14 @@ void add(std::uint64_t& a, std::uint64_t b) {
             : a + b;
 }
 void spawn(State& s, Piece p) {
-    s.active = {p, spawn_rotation(p, s.preset), 3, s.preset == Preset::fusion ? 0 : -2};
+    s.active = {p, spawn_rotation(p, s.preset), 3, -2};
+    if (s.preset == Preset::fusion) {
+        s.active.y = 0;
+        const auto occupied_cells = cells(s.active);
+        const auto top = std::min_element(
+            occupied_cells.begin(), occupied_cells.end(), [](auto a, auto b) { return a.y < b.y; });
+        s.active.y = -top->y;
+    }
     s.gravity_timer = 0;
     s.lock_elapsed = 0;
     s.lock_resets = 0;
@@ -283,9 +286,10 @@ std::uint8_t spawn_rotation(Piece piece, Preset preset) noexcept {
                ? 2
                : 0;
 }
-bool spin_possible(const State& s) noexcept {
+SpinPossibility spin_possibility(const State& s) noexcept {
+    SpinPossibility result;
     if (s.active.piece != Piece::T || collides(s, s.active))
-        return false;
+        return result;
     const auto spin_pose = [&](const Active& a) {
         auto below = a;
         ++below.y;
@@ -297,8 +301,7 @@ bool spin_possible(const State& s) noexcept {
                 corners += occupied(s, a.x + dx, a.y + dy) ? 1u : 0u;
         return corners >= 3;
     };
-    if (s.last_rotation && spin_pose(s.active))
-        return true;
+    result.already_spin = s.last_rotation && spin_pose(s.active);
     for (bool cw : {false, true}) {
         auto a = s.active;
         a.rotation = static_cast<std::uint8_t>((a.rotation + (cw ? 1 : 3)) % 4);
@@ -307,13 +310,33 @@ bool spin_possible(const State& s) noexcept {
             candidate.x += offset.x;
             candidate.y += offset.y;
             if (!collides(s, candidate)) {
-                if (spin_pose(candidate))
-                    return true;
+                (cw ? result.cw : result.ccw) = spin_pose(candidate);
                 break; // Only the first successful kick is reachable with this input.
             }
         }
     }
-    return false;
+    return result;
+}
+bool spin_possible(const State& s) noexcept {
+    return spin_possibility(s).possible();
+}
+std::vector<SpinPosition>
+enumerate_spin_positions(const State& s, std::uint8_t rotation, bool last_rotation) {
+    std::vector<SpinPosition> positions;
+    if (rotation > 3)
+        return positions;
+    auto candidate = s;
+    candidate.last_rotation = last_rotation;
+    // The T's local cells range from 0 to 2. Include negative origins whose
+    // occupied cells still fit; collides rejects every out-of-board pose.
+    for (int y = -22; y < 20; ++y)
+        for (int x = -2; x < 10; ++x) {
+            candidate.active = {Piece::T, rotation, x, y};
+            const auto reason = spin_possibility(candidate);
+            if (reason.possible())
+                positions.push_back({candidate.active, reason});
+        }
+    return positions;
 }
 State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level) {
     State s;
@@ -324,11 +347,8 @@ State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level
     s.target_rng = normalize(seed ^ 0x3c6ef372u);
     s.bag = {Piece::I, Piece::J, Piece::L, Piece::O, Piece::S, Piece::T, Piece::Z};
     const auto p = draw(s);
-    if (preset == Preset::fusion)
-        s.next[0] = draw(s);
-    else
-        for (auto& n : s.next)
-            n = draw(s);
+    for (auto& n : s.next)
+        n = draw(s);
     spawn(s, p);
     return s;
 }

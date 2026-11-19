@@ -5,8 +5,9 @@
 namespace stackpulse::modern_replay {
 namespace {
 constexpr std::string_view rules =
-    "modern-fusion-issue3-v3;codec=modern-state-v3;tick=60/1;board=10x40;"
-    "geometry=project-90-v1;rotation=SRS-project;fusion=classic-uniform,preview1,hold1,spawn0-TJL2,"
+    "modern-fusion-issue4-v4;codec=modern-state-v4;tick=60/1;board=10x40;"
+    "geometry=project-90-v1;rotation=SRS-project;fusion=classic-uniform,preview5,hold1,spawn-top-"
+    "cell0-TJL2,"
     "classic-gravity,startlevel0-29,immediate,local-spin-lock30,cap15;"
     "modern=bag7,preview5,spawn-2,das10,repeat3,lock30,cap15;fusion-das16-blockcharge-nexttick-"
     "reset10,opposites-neutral;"
@@ -78,7 +79,7 @@ bool encode(const Replay& r, std::vector<std::uint8_t>& bytes, std::string& erro
     if (state_bytes.size() > 262144)
         return fail(error, "initial state limit exceeded");
     std::vector<std::uint8_t> b{'S', 'P', 'M', 'R'};
-    put(b, 3, 2);
+    put(b, 4, 2);
     put(b, 0, 2);
     put(b, rules.size(), 4);
     put(b, state_bytes.size(), 4);
@@ -114,10 +115,10 @@ bool decode(const std::vector<std::uint8_t>& bytes, Replay& out, std::string& er
         if (checksum.get(4) != crc(bytes.data(), bytes.size() - 4))
             return fail(error, "replay CRC mismatch");
         Reader p{bytes};
-        if (p.get(4) != 0x524d5053u || p.get(2) != 3 || p.get(2) != 0)
+        if (p.get(4) != 0x524d5053u || p.get(2) != 4 || p.get(2) != 0)
             return fail(error,
-                        "incompatible Modern/Fusion replay format (requires issue-3 v3; older "
-                        "v1/v2 rejected)");
+                        "incompatible Modern/Fusion replay format (requires issue-4 v4; older "
+                        "v1/v2/v3 rejected)");
         const auto rules_len = p.get(4), state_len = p.get(4), frames = p.get(4), hashes = p.get(4);
         if (rules_len > 4096 || state_len > 262144 || frames > max_frames ||
             hashes != frames / 600 + 1 + (frames % 600 != 0))
