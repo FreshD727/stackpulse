@@ -1,5 +1,6 @@
 # Historical M2 baseline
 
+Historical record: [issue-4 resolution](issues/issue-4-resolution.md) supersedes Fusion preview/spawn and Modern/Fusion compatibility, and adds hold audio and spin visualization.
 The following records the pre-issue-2 implementation. Gameplay, replay compatibility, and current validation are superseded by [issue-3-resolution.md](issues/issue-3-resolution.md).
 
 # M2 validation and remaining gates

@@ -1,6 +1,6 @@
 # Proposed gameplay rules v1
 
-Modern/Fusion current implementation note: the issue-3 v3 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-3 resolution](../docs/issues/issue-3-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
+Modern/Fusion current implementation note: the issue-4 v4 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-4 resolution](../docs/issues/issue-4-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
 
 Status: v1 Modern/Fusion mechanics implemented in M2; human handling/balance validation remains pending. Built-in C++ presets, not a runtime JSON loader, are used; see `docs/M2_VALIDATION.md` for codec and rules-identity differences. Classic remains gated by `classic-reference.md`. M0 executable implements only `core-api-v1.md` diagnostic behavior. Changing any normative value requires a new rules version and compatibility review.
 
