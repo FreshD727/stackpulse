@@ -137,8 +137,8 @@ std::string number(std::uint64_t value) {
 } // namespace
 int main(int argc, char** argv) {
     int smoke_frames = 0;
-    bool smoke_play = false, force_sticks = false, muted_audio = false;
-    std::filesystem::path data_directory, verify_path;
+    bool smoke_play = false, smoke_settings = false, force_sticks = false, muted_audio = false;
+    std::filesystem::path data_directory, verify_path, capture_path;
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
@@ -156,6 +156,10 @@ int main(int argc, char** argv) {
                 return 2;
         } else if (arg == "--verify" && i + 1 < argc)
             verify_path = argv[++i];
+        else if (arg == "--capture" && i + 1 < argc)
+            capture_path = argv[++i];
+        else if (arg == "--smoke-settings")
+            smoke_settings = true;
         else if (arg == "--data-dir" && i + 1 < argc)
             data_directory = argv[++i];
         else if (arg == "--smoke-play")
@@ -175,6 +179,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
+                         "[--smoke-settings] [--capture FILE.bmp] "
                          "[--verify FILE]\n");
             return 2;
         }
@@ -489,9 +494,10 @@ int main(int argc, char** argv) {
                 } else
                     notice = "FRAME STEP IS A PRACTICE TOOL";
             } else if (selection == 4) {
-                if (practice && !playback)
+                if (practice && !playback) {
+                    garbage_fixture = false;
                     start(true, true);
-                else
+                } else
                     notice = "FIXTURE IS A PRACTICE TOOL";
             } else if (selection == 5) {
                 settings_return = screen;
@@ -521,6 +527,8 @@ int main(int argc, char** argv) {
     };
     if (smoke_play)
         start(true, true);
+    if (smoke_settings)
+        screen = Screen::settings;
     std::printf("Stackpulse independent provisional presets; prefs=%s\n",
                 directory.string().c_str());
     while (running) {
@@ -746,7 +754,7 @@ int main(int argc, char** argv) {
                 if (mode)
                     mask = client::modern_input(sample, preset());
                 if (smoke_play && !playback)
-                    mask = game::down;
+                    mask = mode && modern_state.tick == 0 ? modern::clockwise : game::down;
                 if (playback) {
                     if (playback_index ==
                         (mode ? modern_loaded.inputs.size() : loaded.inputs.size())) {
@@ -802,7 +810,8 @@ int main(int argc, char** argv) {
                         notice = std::string(modern_events.spin ? "SPIN " : "CLEAR ") +
                                  number(modern_events.cleared) + " ATK " +
                                  number(modern_events.attack) + " CANCEL " +
-                                 number(modern_events.canceled) +
+                                 number(modern_events.canceled) + " INSERT " +
+                                 number(modern_events.inserted) +
                                  (modern_events.back_to_back ? " B2B" : "") +
                                  (modern_events.perfect_clear ? " PERFECT" : "");
                     if (state.game_over && !playback) {
@@ -901,7 +910,7 @@ int main(int argc, char** argv) {
             text(renderer,
                  30,
                  297,
-                 "START LEVEL: " + number(settings.start_level) +
+                 "CLASSIC START LEVEL: " + number(settings.start_level) +
                      " / LEFT - RIGHT + / ENTER CYCLES");
             if (settings_row == 18)
                 rect(renderer, 24, 316, 585, 22, {26, 61, 65, 255});
@@ -1062,6 +1071,13 @@ int main(int argc, char** argv) {
              349,
              behind ? "OVERLOAD " + number(overload) : "PADS " + number(pads.size()),
              muted);
+        if (!capture_path.empty() &&
+            (!running || (smoke_frames > 0 && frames + 1 >= smoke_frames))) {
+            SDL_Surface* capture_surface = SDL_RenderReadPixels(renderer, nullptr);
+            if (!capture_surface || !SDL_SaveBMP(capture_surface, capture_path.string().c_str()))
+                std::fprintf(stderr, "Screenshot capture failed: %s\n", SDL_GetError());
+            SDL_DestroySurface(capture_surface);
+        }
         SDL_RenderPresent(renderer);
         ++frames;
         if (smoke_frames > 0 && frames >= smoke_frames)

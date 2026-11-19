@@ -8,6 +8,7 @@
 #include <stackpulse/classic.hpp>
 #include <stackpulse/input.hpp>
 #include <stackpulse/modern.hpp>
+#include <utility>
 
 namespace stackpulse::client {
 // Original retro palettes: light pieces plus two accents, cycling every ten levels.
