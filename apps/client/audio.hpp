@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_tones.hpp"
 #include "client_logic.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -29,11 +30,15 @@ class ClientAudio {
         make_tone(1, 768, 150.F, 95.F);
         make_tone(2, 2016, 540.F, 860.F);
         make_tone(3, 7200, 420.F, 1050.F);
-        make_four_line_tone();
+        tones_[static_cast<std::size_t>(Cue::four_line_clear)] =
+            stackpulse::client::audio::four_line_tone();
         make_tone(static_cast<std::size_t>(Cue::hard_drop), 4800, 180.F, 48.F);
-        make_spin_tone(Cue::spin_single, 1);
-        make_spin_tone(Cue::spin_double, 2);
-        make_spin_tone(Cue::spin_triple, 3);
+        tones_[static_cast<std::size_t>(Cue::spin_single)] =
+            stackpulse::client::audio::spin_tone(1);
+        tones_[static_cast<std::size_t>(Cue::spin_double)] =
+            stackpulse::client::audio::spin_tone(2);
+        tones_[static_cast<std::size_t>(Cue::spin_triple)] =
+            stackpulse::client::audio::spin_tone(3);
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             unavailable();
             return;
@@ -92,11 +97,8 @@ class ClientAudio {
     }
 
   private:
-    static constexpr int sample_rate = 48000;
-    struct Tone {
-        std::array<float, 12480> samples{};
-        std::size_t length{};
-    };
+    static constexpr int sample_rate = stackpulse::client::audio::sample_rate;
+    using Tone = stackpulse::client::audio::Tone;
     struct Voice {
         std::size_t tone{}, position{};
         bool active{};
@@ -122,44 +124,6 @@ class ClientAudio {
                 6.28318530718F * (from + (to - from) * progress) / static_cast<float>(sample_rate);
             tone.samples[i] = .045F * attack * release * release *
                               (std::sin(phase) + .16F * std::sin(2.F * phase));
-        }
-    }
-
-    void make_four_line_tone() {
-        auto& tone = tones_[static_cast<std::size_t>(Cue::four_line_clear)];
-        tone.length = tone.samples.size();
-        constexpr std::array<float, 4> notes{523.25F, 659.25F, 783.99F, 1046.5F};
-        const auto note_length = tone.length / notes.size();
-        float phase = 0.F;
-        for (std::size_t i = 0; i < tone.length; ++i) {
-            const auto note = i / note_length, position = i % note_length;
-            const float progress =
-                static_cast<float>(position) / static_cast<float>(note_length - 1);
-            const float attack = std::min(1.F, static_cast<float>(position) / 96.F);
-            phase += 6.28318530718F * notes[note] / static_cast<float>(sample_rate);
-            tone.samples[i] = .06F * attack * (1.F - progress) * std::sin(phase);
-        }
-    }
-
-    void make_spin_tone(Cue cue, unsigned tier) {
-        auto& tone = tones_[static_cast<std::size_t>(cue)];
-        // Each tier adds an ascending note and a brighter, stronger final chord.
-        // These short original synth phrases stay bounded and callback allocation-free.
-        constexpr std::array<float, 5> notes{523.25F, 659.25F, 783.99F, 1046.5F, 1318.51F};
-        const auto count = static_cast<std::size_t>(tier + 2);
-        tone.length = 5280 + 2400 * tier;
-        const auto note_length = tone.length / count;
-        float phase = 0.F;
-        for (std::size_t i = 0; i < tone.length; ++i) {
-            const auto note = std::min(i / note_length, count - 1);
-            const auto position = i - note * note_length;
-            const auto length = note + 1 == count ? tone.length - note * note_length : note_length;
-            const float progress = static_cast<float>(position) / static_cast<float>(length - 1);
-            const float attack = std::min(1.F, static_cast<float>(position) / 96.F);
-            phase += 6.28318530718F * notes[note] / static_cast<float>(sample_rate);
-            const float harmonics = std::sin(phase) + .12F * tier * std::sin(2.F * phase) +
-                                    (note + 1 == count ? .22F * std::sin(1.5F * phase) : 0.F);
-            tone.samples[i] = (.045F + .008F * tier) * attack * (1.F - progress) * harmonics;
         }
     }
 
