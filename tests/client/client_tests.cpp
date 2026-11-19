@@ -3,6 +3,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
+#include <stdexcept>
 
 namespace client = stackpulse::client;
 
@@ -12,43 +13,46 @@ bool same_color(SDL_Color a, SDL_Color b) {
 }
 } // namespace
 
-TEST_CASE("Classic palettes cycle every ten levels with three piece groups", "[client][palette]") {
+TEST_CASE("Every gravity palette has seven distinct piece colors", "[client][palette]") {
     using Piece = stackpulse::classic::Piece;
     constexpr std::array pieces{
         Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
-    for (std::uint32_t level = 0; level < 30; ++level) {
-        CAPTURE(level);
-        const auto light = client::piece_color(Piece::I, level);
-        const auto first = client::piece_color(Piece::J, level);
-        const auto second = client::piece_color(Piece::S, level);
-        REQUIRE(same_color(light, client::piece_color(Piece::O, level)));
-        REQUIRE(same_color(light, client::piece_color(Piece::T, level)));
-        REQUIRE(same_color(first, client::piece_color(Piece::L, level)));
-        REQUIRE(same_color(second, client::piece_color(Piece::Z, level)));
-        REQUIRE_FALSE(same_color(light, first));
-        REQUIRE_FALSE(same_color(light, second));
-        REQUIRE_FALSE(same_color(first, second));
-        for (auto piece : pieces) {
-            const auto color = client::piece_color(piece, level);
+    for (std::uint32_t interval = 1; interval <= 60; ++interval) {
+        CAPTURE(interval);
+        for (std::size_t a = 0; a < pieces.size(); ++a) {
+            const auto color = client::piece_color(pieces[a], interval);
             REQUIRE(color.a == 255);
-            REQUIRE(same_color(color, client::piece_color(piece, level + 10)));
-            const auto highlight = client::block_highlight(color);
-            REQUIRE(highlight.r >= color.r);
-            REQUIRE(highlight.g >= color.g);
-            REQUIRE(highlight.b >= color.b);
-            REQUIRE(highlight.a == 255);
+            for (std::size_t b = a + 1; b < pieces.size(); ++b)
+                REQUIRE_FALSE(same_color(color, client::piece_color(pieces[b], interval)));
         }
     }
-    for (auto piece : pieces)
-        REQUIRE_FALSE(same_color(client::piece_color(piece, 0), client::piece_color(piece, 1)));
-    // All ten palettes differ, including the wrap from level nine to ten.
-    for (std::uint32_t a = 0; a < 10; ++a)
-        for (std::uint32_t b = a + 1; b < 10; ++b)
-            REQUIRE_FALSE(
-                same_color(client::piece_color(Piece::J, a), client::piece_color(Piece::J, b)));
-    REQUIRE_FALSE(same_color(client::piece_color(Piece::J, 9), client::piece_color(Piece::J, 10)));
     const auto saturated = client::block_highlight({250, 225, 42, 255});
     REQUIRE(same_color(saturated, SDL_Color{255, 255, 77, 255}));
+}
+
+TEST_CASE("Classic and Fusion speed plateaus keep the palette", "[client][palette]") {
+    namespace classic = stackpulse::classic;
+    namespace modern = stackpulse::modern;
+    for (std::uint32_t level = 0; level < 40; ++level) {
+        CAPTURE(level);
+        const auto before = classic::gravity_frames(level);
+        const auto after = classic::gravity_frames(level + 1);
+        if (before == after)
+            REQUIRE(same_color(client::piece_color(classic::Piece::T, before),
+                               client::piece_color(classic::Piece::T, after)));
+        if (level <= 29) {
+            const auto fusion = modern::initial_state(1, modern::Preset::fusion, level);
+            REQUIRE(modern::gravity_interval(fusion) == before);
+        }
+    }
+    REQUIRE_FALSE(same_color(client::piece_color(classic::Piece::T, classic::gravity_frames(9)),
+                             client::piece_color(classic::Piece::T, classic::gravity_frames(10))));
+    // Modern also keys colors to its clamped interval, rather than a line-level counter.
+    auto modern_state = modern::initial_state(1);
+    modern_state.lines = 1000;
+    const auto capped = modern::gravity_interval(modern_state);
+    modern_state.lines += 10;
+    REQUIRE(modern::gravity_interval(modern_state) == capped);
 }
 
 TEST_CASE("line-clear events select a distinct four-line cue", "[client][audio]") {
@@ -58,6 +62,10 @@ TEST_CASE("line-clear events select a distinct four-line cue", "[client][audio]"
     REQUIRE(client::clear_cue(4) == client::Cue::four_line_clear);
     REQUIRE(client::clear_cue(4) != client::clear_cue(3));
     REQUIRE_FALSE(client::clear_cue(5));
+    REQUIRE(client::clear_cue(1, true) == client::Cue::spin_single);
+    REQUIRE(client::clear_cue(2, true) == client::Cue::spin_double);
+    REQUIRE(client::clear_cue(3, true) == client::Cue::spin_triple);
+    REQUIRE_FALSE(client::clear_cue(0, true));
 }
 
 TEST_CASE("keyboard and controller can adjust start level in both directions",
@@ -121,16 +129,16 @@ TEST_CASE("Modern input translates platform drop before hold without swapping bi
     in::TickInput sample;
     sample.held[static_cast<std::size_t>(in::Action::drop)] = true;
     REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hard_drop);
-    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == 0);
+    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == modern::hard_drop);
     sample.held[static_cast<std::size_t>(in::Action::drop)] = false;
     sample.held[static_cast<std::size_t>(in::Action::hold)] = true;
     REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hold);
-    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == 0);
+    REQUIRE(client::modern_input(sample, modern::Preset::fusion) == modern::hold);
     sample.held[static_cast<std::size_t>(in::Action::left)] = true;
     sample.held[static_cast<std::size_t>(in::Action::clockwise)] = true;
     sample.held[static_cast<std::size_t>(in::Action::pause)] = true;
     REQUIRE(client::modern_input(sample, modern::Preset::fusion) ==
-            (modern::left | modern::clockwise));
+            (modern::left | modern::clockwise | modern::hold));
 }
 
 TEST_CASE("Modern pieces use the named Classic palette groups", "[client][palette]") {
@@ -145,4 +153,51 @@ TEST_CASE("Modern pieces use the named Classic palette groups", "[client][palett
                                std::pair{modern::Piece::Z, classic::Piece::Z}};
     for (const auto& [modern_piece, classic_piece] : pairs)
         REQUIRE(client::classic_palette_piece(modern_piece) == classic_piece);
+}
+
+TEST_CASE("Replay saves gate loads and preserve newer dirty input", "[client][replay]") {
+    client::SaveWorker saves;
+    saves.set_dirty(true);
+    std::promise<void> release;
+    auto gate = release.get_future().share();
+    REQUIRE(saves.submit([gate] {
+        gate.wait();
+        return std::string{};
+    }));
+    CHECK(saves.pending());
+    CHECK_FALSE(saves.dirty());
+    CHECK_FALSE(saves.ready_to_load());
+    CHECK_FALSE(saves.poll()); // Must return while the controlled worker is blocked.
+    CHECK_FALSE(saves.submit([] { return std::string{}; }));
+    saves.set_dirty(true); // The player records more input while the snapshot saves.
+    release.set_value();
+    const auto result = saves.poll(true);
+    REQUIRE(result);
+    REQUIRE(result->empty());
+    REQUIRE(saves.dirty());
+    REQUIRE_FALSE(saves.ready_to_load());
+    REQUIRE(saves.submit([] { return std::string{}; }));
+    REQUIRE(saves.poll(true)->empty());
+    REQUIRE(saves.ready_to_load());
+}
+
+TEST_CASE("Replay save exceptions retain the snapshot for serialized retry", "[client][replay]") {
+    client::SaveWorker saves;
+    auto attempts = std::make_shared<unsigned>(0);
+    saves.set_dirty(true);
+    REQUIRE(saves.submit([attempts]() -> std::string {
+        if (++*attempts == 1)
+            throw std::runtime_error("disk failure");
+        return {};
+    }));
+    REQUIRE(saves.poll(true) == std::optional<std::string>{"disk failure"});
+    REQUIRE(saves.retry_needed());
+    REQUIRE_FALSE(saves.ready_to_load());
+    REQUIRE_FALSE(saves.submit([] { return std::string{}; }));
+    saves.set_dirty(true);
+    saves.retry();
+    REQUIRE(saves.poll(true)->empty());
+    REQUIRE(*attempts == 2);
+    REQUIRE(saves.dirty());
+    REQUIRE_FALSE(saves.ready_to_load());
 }

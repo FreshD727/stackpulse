@@ -30,6 +30,10 @@ class ClientAudio {
         make_tone(2, 2016, 540.F, 860.F);
         make_tone(3, 7200, 420.F, 1050.F);
         make_four_line_tone();
+        make_tone(static_cast<std::size_t>(Cue::hard_drop), 4800, 180.F, 48.F);
+        make_spin_tone(Cue::spin_single, 1);
+        make_spin_tone(Cue::spin_double, 2);
+        make_spin_tone(Cue::spin_triple, 3);
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             unavailable();
             return;
@@ -42,8 +46,8 @@ class ClientAudio {
             shutdown();
             return;
         }
-        std::printf(
-            "Audio: synthesized movement / soft drop / rotation / clear / four-line clear\n");
+        std::printf("Audio: synthesized movement / soft drop / hard drop / rotation / clear / spin "
+                    "tiers\n");
     }
 
     void set_playing(bool playing) {
@@ -97,7 +101,7 @@ class ClientAudio {
         std::size_t tone{}, position{};
         bool active{};
     };
-    std::array<Tone, 5> tones_{};
+    std::array<Tone, 9> tones_{};
     std::array<Voice, 8> voices_{};
     std::size_t next_voice_{};
     SDL_AudioStream* stream_{};
@@ -134,6 +138,28 @@ class ClientAudio {
             const float attack = std::min(1.F, static_cast<float>(position) / 96.F);
             phase += 6.28318530718F * notes[note] / static_cast<float>(sample_rate);
             tone.samples[i] = .06F * attack * (1.F - progress) * std::sin(phase);
+        }
+    }
+
+    void make_spin_tone(Cue cue, unsigned tier) {
+        auto& tone = tones_[static_cast<std::size_t>(cue)];
+        // Each tier adds an ascending note and a brighter, stronger final chord.
+        // These short original synth phrases stay bounded and callback allocation-free.
+        constexpr std::array<float, 5> notes{523.25F, 659.25F, 783.99F, 1046.5F, 1318.51F};
+        const auto count = static_cast<std::size_t>(tier + 2);
+        tone.length = 5280 + 2400 * tier;
+        const auto note_length = tone.length / count;
+        float phase = 0.F;
+        for (std::size_t i = 0; i < tone.length; ++i) {
+            const auto note = std::min(i / note_length, count - 1);
+            const auto position = i - note * note_length;
+            const auto length = note + 1 == count ? tone.length - note * note_length : note_length;
+            const float progress = static_cast<float>(position) / static_cast<float>(length - 1);
+            const float attack = std::min(1.F, static_cast<float>(position) / 96.F);
+            phase += 6.28318530718F * notes[note] / static_cast<float>(sample_rate);
+            const float harmonics = std::sin(phase) + .12F * tier * std::sin(2.F * phase) +
+                                    (note + 1 == count ? .22F * std::sin(1.5F * phase) : 0.F);
+            tone.samples[i] = (.045F + .008F * tier) * attack * (1.F - progress) * harmonics;
         }
     }
 

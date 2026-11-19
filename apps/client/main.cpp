@@ -124,9 +124,13 @@ void text(SDL_Renderer* r, float x, float y, const std::string& value, SDL_Color
     color(r, c);
     SDL_RenderDebugText(r, x, y, value.c_str());
 }
-void block(
-    SDL_Renderer* r, float x, float y, game::Piece piece, std::uint32_t level, float size = 14) {
-    const auto c = client::piece_color(piece, level);
+void block(SDL_Renderer* r,
+           float x,
+           float y,
+           game::Piece piece,
+           std::uint32_t gravity_interval,
+           float size = 14) {
+    const auto c = client::piece_color(piece, gravity_interval);
     rect(r, x + 1, y + 1, size - 2, size - 2, c);
     rect(r, x + 2, y + 2, size - 4, 2, client::block_highlight(c));
     rect(r, x + 3, y + size - 4, 2, 2, {35, 50, 69, 255});
@@ -194,6 +198,13 @@ int main(int argc, char** argv) {
                         modern_value.inputs.size(),
                         static_cast<unsigned long long>(modern::state_hash(modern_final)));
             return 0;
+        }
+        std::ifstream header(verify_path, std::ios::binary);
+        std::array<char, 4> magic{};
+        header.read(magic.data(), static_cast<std::streamsize>(magic.size()));
+        if (magic == std::array<char, 4>{'S', 'P', 'M', 'R'}) {
+            std::fprintf(stderr, "Replay rejected: %s\n", modern_error.c_str());
+            return 1;
         }
         replay::Replay value;
         game::State final_state;
@@ -267,8 +278,7 @@ int main(int argc, char** argv) {
     };
     std::uint64_t late = 0, overload = 0;
     int frames = 0, selection = 0, settings_row = 0, capture = -1;
-    bool running = true, focused = true, practice = false, playback = false, step_once = false,
-         dirty = false;
+    bool running = true, focused = true, practice = false, playback = false, step_once = false;
     Screen screen = Screen::home, settings_return = Screen::home;
     game::State state = game::initial_state(1);
     modern::State modern_state = modern::initial_state(1);
@@ -302,19 +312,48 @@ int main(int argc, char** argv) {
                 axis.reset();
         }
     };
-    auto save_recording = [&]() {
-        if (!dirty || playback || smoke_frames > 0)
-            return true;
-        std::string error;
-        if (mode ? mr::save(directory / "last.spmr", modern_recording, error)
-                 : replay::save(replay_path, recording, error)) {
-            dirty = false;
-            notice = mode ? "REPLAY SAVED: last.spmr" : "REPLAY SAVED: last.spcr";
+    // Encoding validates every recorded tick. Run that work on an owned snapshot;
+    // never replay a long run on the event/render thread. Only one disk writer runs.
+    client::SaveWorker saves;
+    auto poll_save = [&](bool wait) {
+        const auto result = saves.poll(wait);
+        if (!result)
+            return;
+        if (result->empty()) {
+            notice = "REPLAY SAVED";
         } else {
-            notice = "SAVE FAILED: " + error;
-            std::fprintf(stderr, "Replay save: %s\n", error.c_str());
+            notice = "SAVE FAILED: " + *result;
+            std::fprintf(stderr, "Replay save: %s\n", result->c_str());
+        }
+    };
+    auto save_recording = [&]() {
+        poll_save(false);
+        if (saves.pending()) {
+            if (saves.dirty())
+                notice = "PREVIOUS REPLAY SAVE IN PROGRESS / RETRY";
+            return !saves.dirty();
+        }
+        if (saves.retry_needed()) {
+            saves.retry();
+            notice = "RETRYING PREVIOUS REPLAY SAVE";
             return false;
         }
+        if (!saves.dirty() || playback || smoke_frames > 0)
+            return true;
+        if (mode) {
+            saves.submit([snapshot = modern_recording, path = directory / "last.spmr"]() {
+                std::string error;
+                mr::save(path, snapshot, error);
+                return error;
+            });
+        } else {
+            saves.submit([snapshot = recording, path = replay_path]() {
+                std::string error;
+                replay::save(path, snapshot, error);
+                return error;
+            });
+        }
+        notice = "SAVING REPLAY";
         return true;
     };
     auto start = [&](bool lab, bool fixture) {
@@ -329,15 +368,15 @@ int main(int argc, char** argv) {
         if (mode) {
             modern_state = fixture && !garbage_fixture
                                ? modern::spin_fixture(seed, preset(), fixture_rows)
-                               : modern::initial_state(seed, preset());
+                               : modern::initial_state(seed, preset(), settings.start_level);
             if (garbage_fixture) {
-                modern_state = modern::initial_state(seed, preset());
+                modern_state = modern::initial_state(seed, preset(), settings.start_level);
                 modern::enqueue(modern_state, {1, 0, 60, 1, 4, 4});
             }
             modern_recording = {modern_state, {}};
             sync_display();
         }
-        dirty = false;
+        saves.set_dirty(false);
         screen = Screen::play;
         timeline.clear();
         release(SDL_GetTicksNS());
@@ -443,6 +482,10 @@ int main(int argc, char** argv) {
                 std::string error;
                 if (!save_recording())
                     return;
+                if (!saves.ready_to_load()) {
+                    notice = "REPLAY SAVE IN PROGRESS / RETRY PLAY REPLAY";
+                    return;
+                }
                 bool ok = mode ? mr::load(directory / "last.spmr", modern_loaded, error)
                                : replay::load(replay_path, loaded, error);
                 if (ok) {
@@ -531,7 +574,15 @@ int main(int argc, char** argv) {
         screen = Screen::settings;
     std::printf("Stackpulse independent provisional presets; prefs=%s\n",
                 directory.string().c_str());
+    auto previous_frame_time = SDL_GetTicksNS();
+    bool previous_frame_playing = screen == Screen::play;
     while (running) {
+        const auto frame_time = SDL_GetTicksNS();
+        // Paused/menu time is not simulation debt when play resumes.
+        if (!previous_frame_playing)
+            epoch += frame_time - previous_frame_time;
+        previous_frame_time = frame_time;
+        poll_save(false);
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             switch (event.type) {
@@ -795,14 +846,17 @@ int main(int argc, char** argv) {
                         audio.play(ClientAudio::Cue::soft_drop);
                     if (events.rotated)
                         audio.play(ClientAudio::Cue::rotate);
-                    if (const auto cue = client::clear_cue(events.cleared))
+                    if (mode && modern_events.hard_dropped)
+                        audio.play(ClientAudio::Cue::hard_drop);
+                    if (const auto cue =
+                            client::clear_cue(events.cleared, mode && modern_events.spin))
                         audio.play(*cue);
                     if (!playback) {
                         if (mode)
                             modern_recording.inputs.push_back(mask);
                         else
                             recording.inputs.push_back(mask);
-                        dirty = true;
+                        saves.set_dirty(true);
                     }
                     if (events.cleared)
                         notice = number(events.cleared) + " LINES CLEARED";
@@ -828,6 +882,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        previous_frame_playing = screen == Screen::play;
         audio.set_playing(screen == Screen::play);
         const bool behind = tick_boundary(ticks + 1) <= now;
         if (behind)
@@ -861,13 +916,15 @@ int main(int argc, char** argv) {
             text(renderer,
                  382,
                  119,
-                 mode == 2 ? "FIVE NEXT / HOLD / GHOST" : "ONE NEXT PIECE",
+                 mode == 2   ? "FIVE NEXT / HOLD / GHOST"
+                 : mode == 1 ? "ONE NEXT / HOLD"
+                             : "ONE NEXT PIECE",
                  mint);
             text(renderer,
                  382,
                  142,
                  mode == 2   ? "HARD DROP / SRS KICKS"
-                 : mode == 1 ? "SRS KICKS / SPIN REWARDS"
+                 : mode == 1 ? "HARD DROP / SRS / SPINS"
                              : "NO HOLD / GHOST / KICKS");
             text(renderer, 382, 202, "PRACTICE TOOLS", mint);
             text(renderer, 382, 225, "SEEDS / FRAME STEP");
@@ -910,12 +967,14 @@ int main(int argc, char** argv) {
             text(renderer,
                  30,
                  297,
-                 "CLASSIC START LEVEL: " + number(settings.start_level) +
+                 "CLASSIC / FUSION START LEVEL: " + number(settings.start_level) +
                      " / LEFT - RIGHT + / ENTER CYCLES");
             if (settings_row == 18)
                 rect(renderer, 24, 316, 585, 22, {26, 61, 65, 255});
             text(renderer, 30, 323, "BACK / ESC OR PAD BACK");
         } else {
+            const auto palette_speed =
+                mode ? modern::gravity_interval(modern_state) : game::gravity_frames(state.level);
             constexpr float bx = 158, by = 61, cell = 14;
             rect(renderer, bx - 3, by - 3, 146, 286, {47, 67, 89, 255});
             rect(renderer, bx, by, 140, 280, {12, 22, 35, 255});
@@ -933,7 +992,7 @@ int main(int argc, char** argv) {
                                   ? client::classic_palette_piece(
                                         static_cast<modern::Piece>(value - 1))
                                   : static_cast<game::Piece>(value <= 7 ? value - 1 : 0),
-                              state.level);
+                              palette_speed);
                 }
             if (mode && !state.game_over) {
                 if (mode == 2)
@@ -950,7 +1009,7 @@ int main(int argc, char** argv) {
                               bx + c.x * cell,
                               by + c.y * cell,
                               client::classic_palette_piece(modern_state.active.piece),
-                              state.level);
+                              palette_speed);
             }
             if (!mode && !state.game_over && state.entry_timer == 0)
                 for (const auto cell_position : game::cells(state.active))
@@ -959,7 +1018,7 @@ int main(int argc, char** argv) {
                               bx + cell_position.x * cell,
                               by + cell_position.y * cell,
                               state.active.piece,
-                              state.level);
+                              palette_speed);
             text(renderer, 20, 68, playback ? "REPLAY" : practice ? "PRACTICE" : "MARATHON", mint);
             text(renderer, 20, 96, "SCORE", muted);
             text(renderer, 20, 111, number(state.score));
@@ -980,10 +1039,10 @@ int main(int argc, char** argv) {
                               320 + c.x * 10.F,
                               85 + i * 39.F + c.y * 10.F,
                               client::classic_palette_piece(preview.piece),
-                              state.level,
+                              palette_speed,
                               10);
                 }
-                if (mode == 2) {
+                {
                     text(renderer, 20, 305, modern_state.hold_used ? "HOLD (USED)" : "HOLD", mint);
                     if (modern_state.has_hold)
                         for (auto c : modern::cells({modern_state.held_piece, 0, 0, 0}))
@@ -991,13 +1050,13 @@ int main(int argc, char** argv) {
                                   20 + c.x * 9.F,
                                   319 + c.y * 9.F,
                                   client::classic_palette_piece(modern_state.held_piece),
-                                  state.level,
+                                  palette_speed,
                                   9);
                 }
             } else {
                 game::Active preview{state.next, game::spawn_rotation(state.next), 0, 0};
                 for (auto c : game::cells(preview))
-                    block(renderer, 320 + c.x * 14.F, 85 + c.y * 14.F, state.next, state.level);
+                    block(renderer, 320 + c.x * 14.F, 85 + c.y * 14.F, state.next, palette_speed);
             }
             if (screen == Screen::pause) {
                 text(renderer, 414, 65, state.game_over ? "GAME OVER" : "PAUSED", mint);
@@ -1084,7 +1143,14 @@ int main(int argc, char** argv) {
             running = false;
         SDL_Delay(1);
     }
+    poll_save(true);
+    // Finish the active snapshot before scheduling the final run, then drain it.
+    if (saves.retry_needed()) {
+        saves.retry();
+        poll_save(true);
+    }
     save_recording();
+    poll_save(true);
     std::printf("Client finished: frames=%d ticks=%llu game_ticks=%llu lines=%u late=%llu "
                 "overload=%llu hash=%llu\n",
                 frames,

@@ -2,40 +2,95 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <functional>
+#include <future>
 #include <optional>
 #include <stackpulse/classic.hpp>
 #include <stackpulse/input.hpp>
 #include <stackpulse/modern.hpp>
+#include <string>
 #include <utility>
 
 namespace stackpulse::client {
-// Original retro palettes: light pieces plus two accents, cycling every ten levels.
-constexpr SDL_Color piece_color(classic::Piece piece, std::uint32_t level) {
-    constexpr std::array<std::array<SDL_Color, 3>, 10> palettes{{
-        {{{76, 120, 224, 255}, {88, 204, 224, 255}, {208, 232, 252, 255}}},
-        {{{64, 160, 104, 255}, {160, 216, 88, 255}, {224, 244, 200, 255}}},
-        {{{148, 96, 204, 255}, {220, 132, 224, 255}, {244, 216, 252, 255}}},
-        {{{64, 156, 216, 255}, {112, 216, 152, 255}, {204, 244, 232, 255}}},
-        {{{200, 88, 148, 255}, {112, 132, 232, 255}, {252, 212, 232, 255}}},
-        {{{72, 176, 160, 255}, {156, 116, 224, 255}, {220, 228, 252, 255}}},
-        {{{208, 104, 72, 255}, {232, 188, 88, 255}, {252, 228, 200, 255}}},
-        {{{132, 104, 216, 255}, {104, 192, 224, 255}, {216, 220, 252, 255}}},
-        {{{184, 152, 64, 255}, {184, 216, 112, 255}, {244, 244, 200, 255}}},
-        {{{208, 88, 104, 255}, {232, 152, 88, 255}, {252, 216, 208, 255}}},
-    }};
-    const auto& palette = palettes[level % palettes.size()];
-    switch (piece) {
-    case classic::Piece::J:
-    case classic::Piece::L:
-        return palette[0];
-    case classic::Piece::S:
-    case classic::Piece::Z:
-        return palette[1];
-    default:
-        return palette[2];
+// Owns the saved snapshot through its task, including failed saves awaiting retry.
+// Completion never clears input recorded after a snapshot was submitted.
+class SaveWorker {
+    std::future<std::string> job_;
+    std::function<std::string()> snapshot_;
+    std::optional<std::string> launch_error_;
+    bool dirty_{};
+    void launch() {
+        try {
+            job_ = std::async(std::launch::async, snapshot_);
+        } catch (const std::exception& error) {
+            launch_error_ = error.what();
+        } catch (...) {
+            launch_error_ = "unknown save launch failure";
+        }
     }
+
+  public:
+    void set_dirty(bool value) {
+        dirty_ = value;
+    }
+    bool dirty() const {
+        return dirty_;
+    }
+    bool pending() const {
+        return job_.valid();
+    }
+    bool retry_needed() const {
+        return !pending() && static_cast<bool>(snapshot_);
+    }
+    bool ready_to_load() const {
+        return !pending() && !snapshot_ && !dirty_;
+    }
+    bool submit(std::function<std::string()> snapshot) {
+        if (pending() || snapshot_)
+            return false;
+        snapshot_ = std::move(snapshot);
+        dirty_ = false;
+        launch();
+        return true;
+    }
+    void retry() {
+        if (retry_needed())
+            launch();
+    }
+    std::optional<std::string> poll(bool wait = false) {
+        if (launch_error_)
+            return std::exchange(launch_error_, std::nullopt);
+        if (!pending() ||
+            (!wait && job_.wait_for(std::chrono::seconds(0)) != std::future_status::ready))
+            return std::nullopt;
+        std::string error;
+        try {
+            error = job_.get();
+        } catch (const std::exception& exception) {
+            error = exception.what();
+        } catch (...) {
+            error = "unknown replay save failure";
+        }
+        if (error.empty())
+            snapshot_ = {};
+        return error;
+    }
+};
+
+// Key the palette by the actual gravity interval, so speed plateaus retain colors.
+constexpr SDL_Color piece_color(classic::Piece piece, std::uint32_t gravity_interval) {
+    constexpr std::array<SDL_Color, 7> palette{{{72, 196, 220, 255},
+                                                {232, 196, 72, 255},
+                                                {176, 104, 224, 255},
+                                                {96, 204, 116, 255},
+                                                {224, 88, 108, 255},
+                                                {88, 120, 224, 255},
+                                                {232, 148, 72, 255}}};
+    return palette[(static_cast<std::size_t>(piece) + gravity_interval) % palette.size()];
 }
 
 // Piece enum orders differ between rulesets; never cast between them.
@@ -58,7 +113,7 @@ constexpr classic::Piece classic_palette_piece(modern::Piece piece) {
     }
     return classic::Piece::I;
 }
-constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Preset preset) {
+constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Preset /*preset*/) {
     std::uint32_t mask = 0;
     constexpr std::array mapping{
         std::pair{input::Action::left, modern::left},
@@ -69,12 +124,10 @@ constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Pre
     for (const auto& [action, bit] : mapping)
         if (sample.held[static_cast<std::size_t>(action)])
             mask |= bit;
-    if (preset == modern::Preset::modern) {
-        if (sample.held[static_cast<std::size_t>(input::Action::hold)])
-            mask |= modern::hold;
-        if (sample.held[static_cast<std::size_t>(input::Action::drop)])
-            mask |= modern::hard_drop;
-    }
+    if (sample.held[static_cast<std::size_t>(input::Action::hold)])
+        mask |= modern::hold;
+    if (sample.held[static_cast<std::size_t>(input::Action::drop)])
+        mask |= modern::hard_drop;
     return mask;
 }
 
@@ -85,9 +138,21 @@ constexpr SDL_Color block_highlight(SDL_Color color) {
             255};
 }
 
-enum class Cue : std::size_t { shift, soft_drop, rotate, clear, four_line_clear };
+enum class Cue : std::size_t {
+    shift,
+    soft_drop,
+    rotate,
+    clear,
+    four_line_clear,
+    hard_drop,
+    spin_single,
+    spin_double,
+    spin_triple
+};
 
-constexpr std::optional<Cue> clear_cue(unsigned lines) {
+constexpr std::optional<Cue> clear_cue(unsigned lines, bool spin = false) {
+    if (spin && lines >= 1 && lines <= 3)
+        return lines == 1 ? Cue::spin_single : lines == 2 ? Cue::spin_double : Cue::spin_triple;
     if (lines == 4)
         return Cue::four_line_clear;
     if (lines >= 1 && lines <= 3)
