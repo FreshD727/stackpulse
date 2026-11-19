@@ -113,7 +113,7 @@ constexpr classic::Piece classic_palette_piece(modern::Piece piece) {
     }
     return classic::Piece::I;
 }
-constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Preset /*preset*/) {
+constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Preset preset) {
     std::uint32_t mask = 0;
     constexpr std::array mapping{
         std::pair{input::Action::left, modern::left},
@@ -126,7 +126,8 @@ constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Pre
             mask |= bit;
     if (sample.held[static_cast<std::size_t>(input::Action::hold)])
         mask |= modern::hold;
-    if (sample.held[static_cast<std::size_t>(input::Action::drop)])
+    if (preset == modern::Preset::modern &&
+        sample.held[static_cast<std::size_t>(input::Action::drop)])
         mask |= modern::hard_drop;
     return mask;
 }

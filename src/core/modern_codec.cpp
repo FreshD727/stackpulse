@@ -8,9 +8,10 @@ bool valid_state(const State& s) noexcept {
         static_cast<unsigned>(s.preset) > 1 || static_cast<unsigned>(s.active.piece) > 6 ||
         s.active.rotation > 3 || s.active.x < -4 || s.active.x > 10 || s.active.y < -20 ||
         s.active.y > 19 || s.held & ~action_mask || !s.rng || !s.garbage_rng || !s.target_rng ||
-        s.bag_cursor > 7 || static_cast<unsigned>(s.held_piece) > 6 || s.direction < -1 ||
-        s.direction > 1 || s.combo < -1 || s.combo > 1000000 || s.lock_resets > 15 ||
-        s.last_kick > 4 || s.gravity_timer > 60 || s.lock_elapsed > 30 || s.incoming.size() > 256 ||
+        (s.preset == Preset::fusion && s.das_timer > 16) || s.bag_cursor > 7 ||
+        static_cast<unsigned>(s.held_piece) > 6 || s.direction < -1 || s.direction > 1 ||
+        s.combo < -1 || s.combo > 1000000 || s.lock_resets > 15 || s.last_kick > 4 ||
+        s.gravity_timer > 60 || s.lock_elapsed > 30 || s.incoming.size() > 256 ||
         s.received_ids.size() > 4096)
         return false;
     if (!s.game_over)
@@ -88,7 +89,7 @@ struct Reader {
 } // namespace
 std::vector<std::uint8_t> canonical_bytes(const State& s) {
     Writer w;
-    w.u(2, 4);
+    w.u(rules_version, 4);
     w.u(static_cast<unsigned>(s.preset), 1);
     w.u(s.tick, 8);
     w.u(s.score, 8);
@@ -140,7 +141,7 @@ bool decode_state(const std::vector<std::uint8_t>& b, State& out) {
     if (b.size() > 50000)
         return false;
     Reader r{b};
-    if (r.u(4) != 2)
+    if (r.u(4) != rules_version)
         return false;
     State s;
     s.preset = static_cast<Preset>(r.u(1));

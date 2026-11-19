@@ -1,5 +1,7 @@
 # Issue 2 resolution
 
+Historical issue-2 record: [issue-3 resolution](issue-3-resolution.md) supersedes Fusion T locking, wall-charge handling, spawn orientation, hard drop, spin sound and Modern/Fusion compatibility below.
+
 The supplied [report](issue-2.md) is retained, with trailing whitespace normalized. Classic simulation, its controls, and SPCR remain unchanged. Presentation colors now distinguish all seven pieces.
 
 ## Gameplay

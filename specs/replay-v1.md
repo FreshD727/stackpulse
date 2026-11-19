@@ -1,6 +1,6 @@
 # Replay formats: implemented provisional and future draft
 
-Modern/Fusion current implementation note: the issue-2 v2 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-2 resolution](../docs/issues/issue-2-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
+Modern/Fusion current implementation note: the issue-3 v3 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-3 resolution](../docs/issues/issue-3-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
 
 Status: updated 2026-11-18. M1 implements the separate **SPCR provisional Classic v1** format described first. The later **SPR1 draft** remains unimplemented. The two are not compatible, and SPCR is not fulfillment of the future multiplayer/Modern replay contract.
 

@@ -924,7 +924,7 @@ int main(int argc, char** argv) {
                  382,
                  142,
                  mode == 2   ? "HARD DROP / SRS KICKS"
-                 : mode == 1 ? "HARD DROP / SRS / SPINS"
+                 : mode == 1 ? "SRS / LOCAL SPIN LOCK"
                              : "NO HOLD / GHOST / KICKS");
             text(renderer, 382, 202, "PRACTICE TOOLS", mint);
             text(renderer, 382, 225, "SEEDS / FRAME STEP");
@@ -1033,7 +1033,11 @@ int main(int argc, char** argv) {
             text(renderer, 320, 66, "NEXT", mint);
             if (mode) {
                 for (int i = 0; i < (mode == 2 ? 5 : 1); ++i) {
-                    modern::Active preview{modern_state.next[i], 0, 0, 0};
+                    modern::Active preview{
+                        modern_state.next[i],
+                        modern::spawn_rotation(modern_state.next[i], modern_state.preset),
+                        0,
+                        0};
                     for (auto c : modern::cells(preview))
                         block(renderer,
                               320 + c.x * 10.F,
@@ -1045,7 +1049,11 @@ int main(int argc, char** argv) {
                 {
                     text(renderer, 20, 305, modern_state.hold_used ? "HOLD (USED)" : "HOLD", mint);
                     if (modern_state.has_hold)
-                        for (auto c : modern::cells({modern_state.held_piece, 0, 0, 0}))
+                        for (auto c : modern::cells({modern_state.held_piece,
+                                                     modern::spawn_rotation(modern_state.held_piece,
+                                                                            modern_state.preset),
+                                                     0,
+                                                     0}))
                             block(renderer,
                                   20 + c.x * 9.F,
                                   319 + c.y * 9.F,
@@ -1081,13 +1089,17 @@ int main(int argc, char** argv) {
             } else {
                 text(renderer, 414, 66, mode_name(), mint);
                 text(renderer, 414, 87, "CONTROLS", mint);
-                for (std::size_t i = 0; i < 8; ++i)
+                unsigned control_row = 0;
+                for (std::size_t i = 0; i < 8; ++i) {
+                    if ((i == 6 && mode != 2) || (i == 7 && !mode))
+                        continue;
                     text(renderer,
                          414,
-                         106.F + static_cast<float>(i) * 16.F,
+                         106.F + static_cast<float>(control_row++) * 16.F,
                          std::string(names[i]) + ": " +
                              SDL_GetScancodeName(static_cast<SDL_Scancode>(settings.keys[i])),
                          muted);
+                }
                 text(renderer, 414, 243, "F2 RESTART  F3 NEW SEED", muted);
                 text(renderer,
                      414,

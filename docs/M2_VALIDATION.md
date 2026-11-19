@@ -1,6 +1,6 @@
 # Historical M2 baseline
 
-The following records the pre-issue-2 implementation. Gameplay, replay compatibility, and current validation are superseded by [issue-2-resolution.md](issues/issue-2-resolution.md).
+The following records the pre-issue-2 implementation. Gameplay, replay compatibility, and current validation are superseded by [issue-3-resolution.md](issues/issue-3-resolution.md).
 
 # M2 validation and remaining gates
 

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 namespace stackpulse::modern {
-inline constexpr std::uint32_t rules_version = 2, action_mask = 255;
+inline constexpr std::uint32_t rules_version = 3, action_mask = 255;
 enum class Preset : std::uint8_t { fusion, modern };
 enum Action : std::uint32_t {
     left = 1,
@@ -64,6 +64,9 @@ initial_state(std::uint32_t seed, Preset preset = Preset::modern, std::uint32_t 
 [[nodiscard]] Active ghost(const State&) noexcept;
 [[nodiscard]] std::array<Cell, 5> kick_offsets(Piece, std::uint8_t from, std::uint8_t to) noexcept;
 bool rotate(State&, bool clockwise) noexcept;
+[[nodiscard]] std::uint8_t spawn_rotation(Piece, Preset) noexcept;
+// Completed spin or one actual CW/CCW first-success kick reaches a grounded 3-corner pose.
+[[nodiscard]] bool spin_possible(const State&) noexcept;
 bool step(State&, std::uint32_t held, Events* events = nullptr);
 // Arrival is authoritative/practice input; duplicates are idempotent, max 256 pending.
 bool enqueue(State&, const Packet&);

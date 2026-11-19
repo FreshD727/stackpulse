@@ -94,7 +94,7 @@ void add(std::uint64_t& a, std::uint64_t b) {
             : a + b;
 }
 void spawn(State& s, Piece p) {
-    s.active = {p, 0, 3, s.preset == Preset::fusion ? 0 : -2};
+    s.active = {p, spawn_rotation(p, s.preset), 3, s.preset == Preset::fusion ? 0 : -2};
     s.gravity_timer = 0;
     s.lock_elapsed = 0;
     s.lock_resets = 0;
@@ -278,6 +278,43 @@ bool rotate(State& s, bool cw) noexcept {
     }
     return false;
 }
+std::uint8_t spawn_rotation(Piece piece, Preset preset) noexcept {
+    return preset == Preset::fusion && (piece == Piece::T || piece == Piece::J || piece == Piece::L)
+               ? 2
+               : 0;
+}
+bool spin_possible(const State& s) noexcept {
+    if (s.active.piece != Piece::T || collides(s, s.active))
+        return false;
+    const auto spin_pose = [&](const Active& a) {
+        auto below = a;
+        ++below.y;
+        if (!collides(s, below))
+            return false;
+        unsigned corners = 0;
+        for (int dy : {0, 2})
+            for (int dx : {0, 2})
+                corners += occupied(s, a.x + dx, a.y + dy) ? 1u : 0u;
+        return corners >= 3;
+    };
+    if (s.last_rotation && spin_pose(s.active))
+        return true;
+    for (bool cw : {false, true}) {
+        auto a = s.active;
+        a.rotation = static_cast<std::uint8_t>((a.rotation + (cw ? 1 : 3)) % 4);
+        for (auto offset : kick_offsets(Piece::T, s.active.rotation, a.rotation)) {
+            auto candidate = a;
+            candidate.x += offset.x;
+            candidate.y += offset.y;
+            if (!collides(s, candidate)) {
+                if (spin_pose(candidate))
+                    return true;
+                break; // Only the first successful kick is reachable with this input.
+            }
+        }
+    }
+    return false;
+}
 State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level) {
     State s;
     s.preset = preset;
@@ -388,7 +425,20 @@ bool step(State& s, std::uint32_t held, Events* output) {
     else if (held & right)
         direction = 1;
     bool move = false;
-    if (direction != s.direction) {
+    if (s.preset == Preset::fusion) {
+        direction =
+            ((held & left) != 0) == ((held & right) != 0) ? 0 : ((held & left) != 0 ? -1 : 1);
+        if (!direction)
+            s.das_timer = 0;
+        else if (direction != s.direction) {
+            s.das_timer = 0;
+            move = true;
+        } else {
+            s.das_timer = std::min(s.das_timer + 1, std::uint64_t{16});
+            move = s.das_timer == 16;
+        }
+        s.direction = direction;
+    } else if (direction != s.direction) {
         s.direction = direction;
         s.das_timer = 0;
         move = direction != 0;
@@ -408,9 +458,12 @@ bool step(State& s, std::uint32_t held, Events* output) {
             e.shifted = true;
             e.moved = true;
             manipulation = true;
-        }
+            if (s.preset == Preset::fusion && s.das_timer == 16)
+                s.das_timer = 10;
+        } else if (s.preset == Preset::fusion)
+            s.das_timer = 16;
     }
-    if (pressed & hard_drop) {
+    if (s.preset == Preset::modern && (pressed & hard_drop)) {
         e.hard_dropped = true;
         const auto a = ghost(s);
         add(s.score, static_cast<std::uint64_t>(a.y - s.active.y) * 2);
@@ -439,7 +492,7 @@ bool step(State& s, std::uint32_t held, Events* output) {
                 }
             }
         }
-        const bool delayed = s.preset == Preset::modern || s.active.piece == Piece::T;
+        const bool delayed = s.preset == Preset::modern || spin_possible(s);
         if (delayed && was_grounded && manipulation && s.lock_resets < 15) {
             s.lock_elapsed = 0;
             ++s.lock_resets;
