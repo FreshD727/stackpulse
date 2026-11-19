@@ -1,5 +1,7 @@
 # Battle v1
 
+Modern/Fusion current implementation note: the issue-2 v2 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-2 resolution](../docs/issues/issue-2-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
+
 Status: M2 implements the project balance/order mechanics in `modern` and the headless `match` harness. Automated tests pass; human balance and M3 network validation remain pending. Applies to Modern/Fusion only; Classic Marathon has no garbage. No account, ranked or secure public service is implied.
 
 | Clear | Base score | Base attack |

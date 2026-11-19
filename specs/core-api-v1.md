@@ -1,5 +1,7 @@
 # Core contracts v1
 
+Modern/Fusion current implementation note: the issue-2 v2 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current issue-2 resolution](../docs/issues/issue-2-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
+
 ## Implemented M0 diagnostic contract
 
 Status: diagnostic contract frozen with `include/stackpulse/core.hpp`. It is a deterministic cursor/input feasibility exercise, not a falling-block simulation, playable Classic, battle engine, or replay implementation. The header is authoritative for C++ signatures; the following defines behavior. Core uses C++20 fixed-width integer arithmetic without SDL, clocks, filesystem or networking. A single caller owns mutable State; presentation reads copies. No shared mutable global state.
