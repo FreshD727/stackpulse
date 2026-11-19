@@ -1,3 +1,7 @@
+# Historical M2 baseline
+
+The following records the pre-issue-2 implementation. Gameplay, replay compatibility, and current validation are superseded by [issue-2-resolution.md](issues/issue-2-resolution.md).
+
 # M2 validation and remaining gates
 
 Date: 18-19 November 2026. Scope: offline Fusion/Modern native play, deterministic mechanics and a shared headless battle harness. Classic v3 code/rules/replay remain separate and its fidelity gaps remain documented in M1_VALIDATION.md. No ROM access or network implementation was used.
