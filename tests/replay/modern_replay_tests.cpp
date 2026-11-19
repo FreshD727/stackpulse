@@ -162,7 +162,7 @@ TEST_CASE("Modern and Classic replay codecs reject each others containers") {
     REQUIRE_FALSE(replay::decode(bytes, classic_record, error));
 }
 
-TEST_CASE("Fusion version four replay retains Classic start level hold and complete stream state") {
+TEST_CASE("Fusion version five replay retains Classic start level hold and complete stream state") {
     auto s = modern::initial_state(49, modern::Preset::fusion, 19);
     REQUIRE(modern::step(s, modern::hold));
     REQUIRE(modern::step(s, modern::left));
@@ -172,7 +172,7 @@ TEST_CASE("Fusion version four replay retains Classic start level hold and compl
     std::vector<std::uint8_t> bytes;
     std::string error;
     REQUIRE(modern_replay::encode(r, bytes, error));
-    REQUIRE(bytes[4] == 4);
+    REQUIRE(bytes[4] == 5);
     modern_replay::Replay out;
     REQUIRE(modern_replay::decode(bytes, out, error));
     REQUIRE(out.initial == s);
@@ -193,10 +193,15 @@ TEST_CASE("Fusion version four replay retains Classic start level hold and compl
     broken[4] = 2;
     reseal(broken);
     REQUIRE_FALSE(modern_replay::decode(broken, out, error));
-    REQUIRE(error.find("older v1/v2/v3 rejected") != std::string::npos);
+    REQUIRE(error.find("older v1/v2/v3/v4 rejected") != std::string::npos);
     REQUIRE(out.initial == s);
     broken = bytes;
     broken[4] = 3;
+    reseal(broken);
+    REQUIRE_FALSE(modern_replay::decode(broken, out, error));
+    REQUIRE(out.initial == s);
+    broken = bytes;
+    broken[4] = 4;
     reseal(broken);
     REQUIRE_FALSE(modern_replay::decode(broken, out, error));
     REQUIRE(out.initial == s);

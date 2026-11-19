@@ -320,13 +320,12 @@ SpinPossibility spin_possibility(const State& s) noexcept {
 bool spin_possible(const State& s) noexcept {
     return spin_possibility(s).possible();
 }
-std::vector<SpinPosition>
-enumerate_spin_positions(const State& s, std::uint8_t rotation, bool last_rotation) {
+std::vector<SpinPosition> enumerate_spin_positions(const State& s, std::uint8_t rotation) {
     std::vector<SpinPosition> positions;
     if (rotation > 3)
         return positions;
     auto candidate = s;
-    candidate.last_rotation = last_rotation;
+    candidate.last_rotation = false; // Enumerated routes never assume scoring history.
     // The T's local cells range from 0 to 2. Include negative origins whose
     // occupied cells still fit; collides rejects every out-of-board pose.
     for (int y = -22; y < 20; ++y)

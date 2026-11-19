@@ -1,6 +1,6 @@
 # Issue 3 resolution
 
-Historical record: [issue-4 resolution](issue-4-resolution.md) supersedes Fusion preview/spawn and Modern/Fusion compatibility, and adds hold audio and spin visualization.
+Historical record: [spin candidate resolution](spin-candidate-resolution.md) supersedes completed-spin delay eligibility and compatibility; [issue-4 resolution](issue-4-resolution.md) supersedes Fusion preview/spawn and Modern/Fusion compatibility, and adds hold audio and spin visualization.
 The supplied [report](issue-3.md) is retained with whitespace normalized. This supersedes conflicting issue-2 Fusion handling and audio defaults. Classic simulation and SPCR are unchanged; Modern gameplay is unchanged.
 
 ## Fusion handling

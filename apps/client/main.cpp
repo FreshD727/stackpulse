@@ -284,7 +284,7 @@ int main(int argc, char** argv) {
     std::uint64_t late = 0, overload = 0;
     int frames = 0, selection = 0, settings_row = 0, capture = -1;
     bool running = true, focused = true, practice = false, playback = false, step_once = false;
-    bool spin_debug = false, spin_debug_history = false;
+    bool spin_debug = false;
     std::uint8_t spin_debug_rotation = 0;
     Screen screen = Screen::home, settings_return = Screen::home;
     game::State state = game::initial_state(1);
@@ -583,7 +583,6 @@ int main(int argc, char** argv) {
         start(true, true);
         spin_debug = true;
         spin_debug_rotation = modern_state.active.rotation;
-        spin_debug_history = modern_state.last_rotation;
         notice = "SPIN INSPECTOR / SIMULATION FROZEN";
     }
     if (smoke_settings)
@@ -655,10 +654,8 @@ int main(int argc, char** argv) {
                     (screen == Screen::play || screen == Screen::pause) &&
                     code == SDL_SCANCODE_F11) {
                     spin_debug = !spin_debug;
-                    if (spin_debug) {
+                    if (spin_debug)
                         spin_debug_rotation = modern_state.active.rotation;
-                        spin_debug_history = modern_state.last_rotation;
-                    }
                     release(event.key.timestamp);
                     notice =
                         spin_debug ? "SPIN INSPECTOR / SIMULATION FROZEN" : "SPIN INSPECTOR CLOSED";
@@ -666,10 +663,7 @@ int main(int argc, char** argv) {
                 }
                 if (spin_debug) {
                     if (event.key.down && code == SDL_SCANCODE_F12) {
-                        if (event.key.mod & SDL_KMOD_SHIFT)
-                            spin_debug_history = !spin_debug_history;
-                        else
-                            spin_debug_rotation = (spin_debug_rotation + 1) % 4;
+                        spin_debug_rotation = (spin_debug_rotation + 1) % 4;
                     } else if (event.key.down && code == SDL_SCANCODE_ESCAPE) {
                         spin_debug = false;
                         release(event.key.timestamp);
@@ -1115,20 +1109,14 @@ int main(int argc, char** argv) {
                     block(renderer, 320 + c.x * 14.F, 85 + c.y * 14.F, state.next, palette_speed);
             }
             if (spin_debug && practice && mode) {
-                const auto positions = modern::enumerate_spin_positions(
-                    modern_state, spin_debug_rotation, spin_debug_history);
-                constexpr SDL_Color completed{255, 205, 92, 255}, cw{72, 218, 255, 255},
-                    ccw{245, 117, 220, 255}, multiple{255, 255, 255, 255};
+                const auto positions =
+                    modern::enumerate_spin_positions(modern_state, spin_debug_rotation);
+                constexpr SDL_Color cw{72, 218, 255, 255}, ccw{245, 117, 220, 255},
+                    multiple{255, 255, 255, 255};
                 std::size_t hidden = 0;
                 for (const auto& position : positions) {
                     const auto& reason = position.reason;
-                    const auto marker_count = static_cast<unsigned>(reason.already_spin) +
-                                              static_cast<unsigned>(reason.cw) +
-                                              static_cast<unsigned>(reason.ccw);
-                    const auto tint = marker_count > 1      ? multiple
-                                      : reason.already_spin ? completed
-                                      : reason.cw           ? cw
-                                                            : ccw;
+                    const auto tint = reason.cw && reason.ccw ? multiple : reason.cw ? cw : ccw;
                     bool visible = false;
                     color(renderer, tint);
                     for (const auto c : modern::cells(position.active)) {
@@ -1155,39 +1143,32 @@ int main(int argc, char** argv) {
                 text(renderer, 382, 65, "SPIN INSPECTOR / FROZEN", mint);
                 text(renderer, 382, 83, "F11 / ESC CLOSE", muted);
                 text(renderer, 382, 101, "F12 ORIENTATION: " + number(spin_debug_rotation));
-                text(renderer,
-                     382,
-                     119,
-                     std::string("SHIFT+F12 LAST ROT: ") + (spin_debug_history ? "YES" : "NO"));
+                text(renderer, 382, 119, "CANDIDATES IGNORE HISTORY", muted);
                 text(renderer,
                      382,
                      137,
                      "ACCEPTED " + number(positions.size()) + " / HIDDEN " + number(hidden),
                      mint);
-                text(renderer, 382, 157, "COMPLETED SPIN", completed);
-                text(renderer, 382, 173, "CW FIRST OPEN KICK", cw);
-                text(renderer, 382, 189, "CCW FIRST OPEN KICK", ccw);
-                text(renderer, 382, 205, "MULTIPLE REASONS", multiple);
-                text(renderer, 382, 223, "SQUARE ORIGIN / + PIVOT", muted);
-                text(renderer, 382, 239, "SOLID = BOARD BLOCKERS", muted);
+                text(renderer, 382, 157, "CW FIRST OPEN KICK", cw);
+                text(renderer, 382, 173, "CCW FIRST OPEN KICK", ccw);
+                text(renderer, 382, 189, "BOTH ROUTES", multiple);
+                text(renderer, 382, 207, "SQUARE ORIGIN / + PIVOT", muted);
+                text(renderer, 382, 223, "SOLID = BOARD BLOCKERS", muted);
                 const auto actual = modern::spin_possibility(modern_state);
                 text(renderer,
                      382,
-                     260,
-                     std::string("ACTUAL ACTIVE: ") + (actual.possible() ? "YES" : "NO"),
+                     244,
+                     std::string("ACTUAL CANDIDATE: ") + (actual.possible() ? "YES" : "NO"),
                      mint);
+                text(renderer, 382, 260, "CW " + number(actual.cw) + " CCW " + number(actual.ccw));
                 text(renderer,
                      382,
                      276,
-                     "DONE " + number(actual.already_spin) + " CW " + number(actual.cw) + " CCW " +
-                         number(actual.ccw));
-                text(renderer,
-                     382,
-                     292,
-                     std::string("ACTUAL LAST ROT: ") + (modern_state.last_rotation ? "YES" : "NO"),
+                     std::string("SCORING READY: ") + (actual.already_spin ? "YES" : "NO"),
                      muted);
-                text(renderer, 382, 310, "LEGAL POSES; NO PATH TEST", muted);
-                text(renderer, 382, 326, "LIVE ACTIVE FILL HIDDEN", muted);
+                text(renderer, 382, 292, "SPIN SCORING REQUIRES LOCK", muted);
+                text(renderer, 382, 308, "LOCAL ROUTE; NO PATH TEST", muted);
+                text(renderer, 382, 324, "LIVE ACTIVE FILL HIDDEN", muted);
             } else if (screen == Screen::pause) {
                 text(renderer, 414, 65, state.game_over ? "GAME OVER" : "PAUSED", mint);
                 constexpr std::array<const char*, 7> menu{"RESUME",

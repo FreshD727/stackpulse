@@ -96,7 +96,8 @@ TEST_CASE("Authored single double triple spin routes run from actual input") {
             REQUIRE(s.active.x == 3);
             REQUIRE(s.active.y == 17);
             REQUIRE(s.last_kick == 4);
-            const unsigned delay = 30u;
+            const unsigned delay =
+                preset == Preset::modern || rows == 1 ? 30u : gravity_interval(s);
             for (unsigned tick = 1; tick < delay; ++tick) {
                 REQUIRE(step(s, 0, &e));
                 if (tick + 1 < delay)
@@ -647,18 +648,18 @@ TEST_CASE("Fusion Classic clear values and all clear bonus scale with the level"
         REQUIRE(s.score == (preset == Preset::fusion ? 2040 : 2100));
     }
 }
-TEST_CASE("Version four snapshots retain Fusion start level hold and timers") {
+TEST_CASE("Version five snapshots retain Fusion start level hold and timers") {
     auto s = initial_state(49, Preset::fusion, 19);
     REQUIRE(step(s, hold));
     REQUIRE(step(s, left));
     REQUIRE(enqueue(s, {19, s.tick, s.tick + 30, 2, 5, 8}));
     auto bytes = canonical_bytes(s);
-    REQUIRE(bytes[0] == 4);
+    REQUIRE(bytes[0] == 5);
     State restored;
     REQUIRE(decode_state(bytes, restored));
     REQUIRE(restored == s);
     REQUIRE(restored.start_level == 19);
-    for (auto older : {1u, 2u, 3u}) {
+    for (auto older : {1u, 2u, 3u, 4u}) {
         bytes[0] = static_cast<std::uint8_t>(older);
         REQUIRE_FALSE(decode_state(bytes, restored));
         REQUIRE(restored == s);
@@ -850,7 +851,8 @@ TEST_CASE("Fusion spin window follows actual CW CCW geometry and disappears outs
         REQUIRE(step(s, cw ? clockwise : counterclockwise, &e));
         REQUIRE(e.rotated);
         REQUIRE(s.last_kick == 4);
-        REQUIRE(spin_possible(s));
+        REQUIRE_FALSE(spin_possible(s));
+        REQUIRE(spin_possibility(s).already_spin);
         REQUIRE_FALSE(e.locked);
         s.active = {Piece::T, 0, 0, 0};
         REQUIRE_FALSE(spin_possible(s));
@@ -894,10 +896,11 @@ TEST_CASE("Fusion moving out of a potential spin cavity restores immediate locki
     REQUIRE(e.locked);
     REQUIRE_FALSE(e.spin);
 }
-TEST_CASE("Fusion completed spin respects the delay cap and failed actions cannot reset it") {
+TEST_CASE("Fusion completed spin without another route locks on blocked gravity and still scores") {
     auto s = spin_fixture(7, Preset::fusion, 3);
     REQUIRE(step(s, clockwise));
-    REQUIRE(spin_possible(s));
+    REQUIRE_FALSE(spin_possible(s));
+    s.gravity_timer = gravity_interval(s) - 1;
     s.lock_resets = 15;
     s.lock_elapsed = 29;
     Events e;
@@ -968,7 +971,11 @@ TEST_CASE("Spin inspector enumerates exactly the gameplay predicate without muta
                 const auto snapshot = board;
                 for (std::uint8_t r = 0; r < 4; ++r)
                     for (bool history : {false, true}) {
-                        const auto positions = enumerate_spin_positions(board, r, history);
+                        auto inspected = board;
+                        inspected.last_rotation = history;
+                        const auto before_inspection = inspected;
+                        const auto positions = enumerate_spin_positions(inspected, r);
+                        REQUIRE(inspected == before_inspection);
                         REQUIRE(board == snapshot);
                         for (int y = -24; y <= 22; ++y)
                             for (int x = -4; x <= 13; ++x) {
@@ -982,12 +989,15 @@ TEST_CASE("Spin inspector enumerates exactly the gameplay predicate without muta
                                 REQUIRE((match != positions.end()) == spin_possible(candidate));
                                 if (match != positions.end()) {
                                     REQUIRE_FALSE(collides(board, match->active));
-                                    REQUIRE(match->reason == spin_possibility(candidate));
+                                    const auto actual = spin_possibility(candidate);
+                                    REQUIRE(match->reason.cw == actual.cw);
+                                    REQUIRE(match->reason.ccw == actual.ccw);
+                                    REQUIRE_FALSE(match->reason.already_spin);
                                     REQUIRE(match->reason.possible());
                                 }
                             }
                     }
-                REQUIRE(enumerate_spin_positions(board, 4, false).empty());
+                REQUIRE(enumerate_spin_positions(board, 4).empty());
             }
 }
 TEST_CASE("Spin diagnostics expose completed history and actual CW CCW routes") {
@@ -1006,13 +1016,13 @@ TEST_CASE("Spin diagnostics expose completed history and actual CW CCW routes") 
         REQUIRE(rotate(s, cw));
         REQUIRE(s.last_kick == 4);
         REQUIRE(spin_possibility(s).already_spin);
-        const auto positions = enumerate_spin_positions(s, s.active.rotation, true);
-        REQUIRE(std::any_of(positions.begin(), positions.end(), [&](const auto& p) {
-            return p.active == s.active && p.reason.already_spin;
+        const auto positions = enumerate_spin_positions(s, s.active.rotation);
+        REQUIRE(std::none_of(positions.begin(), positions.end(), [&](const auto& p) {
+            return p.active == s.active;
         }));
         s.last_rotation = false;
         REQUIRE_FALSE(spin_possibility(s).already_spin);
-        const auto no_history = enumerate_spin_positions(s, s.active.rotation, false);
+        const auto no_history = enumerate_spin_positions(s, s.active.rotation);
         REQUIRE(std::none_of(no_history.begin(), no_history.end(), [](const auto& p) {
             return p.reason.already_spin;
         }));
@@ -1023,9 +1033,93 @@ TEST_CASE("Spin diagnostics expose completed history and actual CW CCW routes") 
         REQUIRE_FALSE(spin_possibility(s).possible());
     }
 }
-TEST_CASE("Spin inspector rejects flat ground with either history assumption") {
+TEST_CASE("Spin inspector rejects flat ground") {
     auto s = initial_state(7, Preset::fusion);
     for (std::uint8_t r = 0; r < 4; ++r)
-        for (bool history : {false, true})
-            REQUIRE(enumerate_spin_positions(s, r, history).empty());
+        REQUIRE(enumerate_spin_positions(s, r).empty());
+}
+
+TEST_CASE("CASE0001 legal CW route retains Fusion delay independent of prior history") {
+    for (bool history : {false, true}) {
+        auto s = initial_state(1, Preset::fusion);
+        for (const auto c : {Cell{1, 14},
+                             {1, 15},
+                             {1, 16},
+                             {1, 17},
+                             {0, 18},
+                             {1, 18},
+                             {4, 18},
+                             {5, 18},
+                             {6, 18},
+                             {0, 19},
+                             {1, 19},
+                             {3, 19},
+                             {4, 19},
+                             {5, 19},
+                             {6, 19}})
+            s.board[(c.y + 20) * 10 + c.x] = 8;
+        s.active = {Piece::T, 0, 0, 12};
+        s.last_rotation = history;
+        REQUIRE(valid_state(s));
+        const auto route = spin_possibility(s);
+        REQUIRE(route.cw);
+        REQUIRE_FALSE(route.ccw);
+        REQUIRE(route.possible());
+        s.gravity_timer = gravity_interval(s) - 1;
+        Events e;
+        REQUIRE(step(s, 0, &e));
+        REQUIRE_FALSE(e.locked);
+        REQUIRE(s.lock_elapsed == 1);
+    }
+}
+TEST_CASE("CASE0002 current three corner pose never grants Fusion delay by itself") {
+    for (auto preset : {Preset::fusion, Preset::modern})
+        for (bool history : {false, true}) {
+            auto s = initial_state(1, preset);
+            for (const auto c : {Cell{0, 16},
+                                 {2, 16},
+                                 {0, 17},
+                                 {2, 17},
+                                 {3, 17},
+                                 {0, 18},
+                                 {3, 18},
+                                 {6, 18},
+                                 {7, 18},
+                                 {0, 19},
+                                 {1, 19},
+                                 {2, 19},
+                                 {3, 19},
+                                 {5, 19},
+                                 {6, 19},
+                                 {7, 19},
+                                 {8, 19},
+                                 {9, 19}})
+                s.board[(c.y + 20) * 10 + c.x] = 8;
+            s.active = {Piece::T, 1, 3, 17};
+            s.last_rotation = history; // Explicit snapshot history from the historical review case.
+            REQUIRE(valid_state(s));
+            const auto reason = spin_possibility(s);
+            REQUIRE(reason.already_spin == history);
+            REQUIRE_FALSE(reason.cw);
+            REQUIRE_FALSE(reason.ccw);
+            REQUIRE_FALSE(reason.possible());
+            auto below = s.active;
+            ++below.y;
+            REQUIRE(collides(s, below));
+            const auto candidates = enumerate_spin_positions(s, 1);
+            REQUIRE(std::none_of(candidates.begin(), candidates.end(), [&](const auto& p) {
+                return p.active == s.active;
+            }));
+            s.gravity_timer = gravity_interval(s) - 1;
+            Events e;
+            REQUIRE(step(s, 0, &e));
+            REQUIRE(e.locked == (preset == Preset::fusion));
+            if (preset == Preset::fusion) {
+                REQUIRE(e.spin == history);
+                REQUIRE(e.cleared == 1);
+                REQUIRE(s.score == (history ? 1600u : 40u));
+            } else {
+                REQUIRE(s.lock_elapsed == 1);
+            }
+        }
 }
