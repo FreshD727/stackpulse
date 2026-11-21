@@ -62,7 +62,7 @@ def main():
         ('CLIENT_GUIDE.md', root / 'apps/client/README.md'),
         ('PROTOCOL.md', root / 'src/protocol/README.md'),
         ('THIRD_PARTY_NOTICES.md', root / 'THIRD_PARTY_NOTICES.md'),
-        ('protocol-v1.md', root / 'specs/protocol-v1.md'),
+        ('protocol-v1.md', root / 'docs/specs/protocol-v1.md'),
         ('PACKAGING.md', root / 'docs/PACKAGING.md'),
         ('licenses/SDL-LICENSE.txt', args.sdl_license),
         ('licenses/SDL-hidapi-LICENSE.txt', args.sdl_license.parent / 'src/hidapi/LICENSE.txt'),
@@ -88,7 +88,8 @@ Launch the native client:
 .\\stackpulse_client.exe
 ```
 
-Choose Fusion or Modern, then Multiplayer to create/join a room or spectate.
+Choose Multiplayer to create/join a room or spectate. Rooms select Classic,
+Fusion or Modern independently of the offline mode.
 For a local dedicated room server in a second PowerShell window:
 
 ```powershell

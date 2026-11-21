@@ -1,6 +1,6 @@
 # Proposed gameplay rules v1
 
-Current implementation: Classic uses provisional rules/state v4 and a 269-byte canonical state; shared Classic/Fusion/Modern boards use rules/state v6 and SPMR v6. Every newly spawned piece requires a fresh Down press after release to soft drop, including hold retrieval and Classic entry delay. Earlier gameplay states/recordings reject explicitly. The spin-candidate behavior in [the spin candidate resolution](../docs/issues/spin-candidate-resolution.md) remains in force. Proposed formats below are not all implemented.
+Current implementation: Classic uses provisional rules/state v4 and a 269-byte canonical state; shared Classic/Fusion/Modern boards use rules/state v6 and SPMR v6. Every newly spawned piece requires a fresh Down press after release to soft drop, including hold retrieval and Classic entry delay. Earlier gameplay states/recordings reject explicitly. Fusion spin eligibility is detailed in the [core contract](core-api-v1.md). Proposed formats below are not all implemented.
 
 Status: v1 Modern/Fusion mechanics implemented in M2; human handling/balance validation remains pending. Built-in C++ presets, not a runtime JSON loader, are used; see `docs/M2_VALIDATION.md` for codec and rules-identity differences. Classic remains gated by `classic-reference.md`. M0 executable implements only `core-api-v1.md` diagnostic behavior. Changing any normative value requires a new rules version and compatibility review.
 

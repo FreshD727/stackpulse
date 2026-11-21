@@ -10,11 +10,11 @@ M1 supplies an offline playable Classic-inspired provisional vertical slice: Mar
 
 ## Scope and evidence
 
-The core implements seven pieces, generic matrix rotations without kicks, collision, gravity, soft drop, immediate failed-down locking, DAS, line clears, scoring, level progression, entry delays and top-out. See [exact provisional behavior](../specs/classic-reference.md). These authored constants and tests are not reference observations. No ROM or extracted assets are required.
+The core implements seven pieces, generic matrix rotations without kicks, collision, gravity, soft drop, immediate failed-down locking, DAS, line clears, scoring, level progression, entry delays and top-out. See [exact provisional behavior](specs/classic-reference.md). These authored constants and tests are not reference observations. No ROM or extracted assets are required.
 
 Practice includes deterministic restart/new seed, frame stepping, the authored four-line I clear fixture, and event inspection. Keyboard/gamepad settings and optional stick input persist locally. The existing native input diagnostic remains available separately. See [client controls](../apps/client/README.md) for actual navigation and storage paths.
 
-The `SPCR` replay module embeds exact provisional rules and a full 268-byte initial state, records one held mask per tick and verifies initial, 600-frame and final FNV hashes plus a whole-file CRC. It re-simulates from the initial state; hash entries are not seek snapshots. This is separate from the unimplemented future `SPR1` draft. See [format and limits](../specs/replay-v1.md).
+The `SPCR` replay module embeds exact provisional rules and a full 268-byte initial state, records one held mask per tick and verifies initial, 600-frame and final FNV hashes plus a whole-file CRC. It re-simulates from the initial state; hash entries are not seek snapshots. This is separate from the unimplemented future `SPR1` draft. See [format and limits](specs/replay-v1.md).
 
 ## Validation record
 

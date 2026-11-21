@@ -1,6 +1,6 @@
 # Replay formats: implemented provisional and future draft
 
-Current implementation: Classic uses provisional rules/state v4 and a 269-byte canonical state; shared Classic/Fusion/Modern boards use rules/state v6 and SPMR v6. Every newly spawned piece requires a fresh Down press after release to soft drop, including hold retrieval and Classic entry delay. Earlier gameplay states/recordings reject explicitly. The spin-candidate behavior in [the spin candidate resolution](../docs/issues/spin-candidate-resolution.md) remains in force. Proposed formats below are not all implemented.
+Current implementation: Classic uses provisional rules/state v4 and a 269-byte canonical state; shared Classic/Fusion/Modern boards use rules/state v6 and SPMR v6. Every newly spawned piece requires a fresh Down press after release to soft drop, including hold retrieval and Classic entry delay. Earlier gameplay states/recordings reject explicitly. Fusion spin eligibility is detailed in the [core contract](core-api-v1.md). Proposed formats below are not all implemented.
 
 Status: updated 2026-11-21. M1 implements the separate **SPCR provisional Classic v1** format described first. The later **SPR1 draft** remains unimplemented. The two are not compatible, and SPCR is not fulfillment of the future multiplayer/Modern replay contract.
 

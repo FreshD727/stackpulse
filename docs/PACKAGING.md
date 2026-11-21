@@ -1,4 +1,21 @@
-# Windows release package
+# Release packages
+
+The private alpha has two distribution artifacts under `out/packages/`:
+`stackpulse-windows-x64.zip` (client, server and tools) and
+`stackpulse-linux-x64-server.tar.gz` (server and tools). Keep the matching
+`.validation.json` reports alongside them. These generated files are ignored by
+Git; upload archives as release assets rather than checking binaries into source.
+The local `out/release/` directory is the latest extracted Windows package and
+can be launched without a source build. Development builds are recreated under
+`out/build/` using the presets.
+
+Before sharing a release, build and test the final source, regenerate both
+packages, inspect their validation reports and launch the actual extracted
+artifacts. The scripts retain dependency licenses and manifests. Do not describe
+a relocated same-host smoke as a clean-machine or cross-distro compatibility test.
+Creating a GitHub release or publishing assets is a separate manual action.
+
+## Windows release package
 
 Build all targets in **Release**, then run `python tools/package_release.py` with
 `--bin-dir out/build/windows-debug/Release` (the Release configuration of the
@@ -47,7 +64,7 @@ run is a relocated smoke test on the same host; it is not proof of a clean VM
 or an unmodified machine without a developer toolchain. A clean Windows VM is
 still the appropriate release acceptance check.
 
-# Determinism matrix
+## Determinism matrix
 
 `stackpulse_determinism_matrix --seeds 100 --ticks 100000 --output matrix.csv`
 runs both Fusion and Modern. Trace v1 specifies xorshift32 seeded with
@@ -84,7 +101,7 @@ missing/duplicate seed-preset rows, unequal requested tick counts and any field
 mismatch. `comparison.json` identifies the CSV hashes and comparison scope; a
 single matrix is recorded as unpaired, never as a successful comparison.
 
-# Linux server package
+## Linux server package
 
 Inside the Linux build environment, build the server/tools with the SDL client
 disabled, then run:
@@ -111,7 +128,7 @@ the environment, and runs the server for three ticks and the headless tool.
 This checks the existing Ubuntu WSL host; it does not establish compatibility
 with other distros, older glibc versions, or a clean VM.
 
-# Room soak
+## Room soak
 
 `python tools/room_soak.py --binary out/build/windows-debug/Release/stackpulse_room_load.exe --seconds 1800 --output out/soak/room-soak.json`
 launches the native authenticated ENet load harness, which owns its server and
