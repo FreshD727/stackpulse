@@ -1,8 +1,54 @@
-# Stackpulse - offline play and authoritative duels
+# Stackpulse
 
-Native C++20/SDL3 falling-block play with Classic, Fusion and Modern offline Marathon, Practice Lab, persistent input settings, replay recording/playback and an SDL-free replay verifier. **Classic-inspired provisional rules** are implemented; NES/reference fidelity is unverified. Classic rotation has no kicks; independent uniform piece draws, constant entry delays and several timing details remain provisional. See the [behavior and fidelity ledger](specs/classic-reference.md).
+A native C++20 / SDL3 falling-block game with three modes, offline practice and authoritative multiplayer rooms. This is a private alpha: gameplay and file formats can change, and Classic uses independently authored provisional rules. Reference fidelity is unverified.
 
-On Windows install Visual Studio 2026 with Desktop development with C++, a CMake version supporting its Visual Studio 18 generator, and Git. The tested CMake version is 4.5.0-rc2; CMakeLists.txt's 3.25 floor applies to older supported generators, not the VS2026 preset. From the repository:
+- **Classic**: one preview, immediate locking, no hold or hard drop.
+- **Fusion**: Classic-style progression with five previews, hold, kicks and spins.
+- **Modern**: five previews, hold, ghost, hard drop and delayed locking.
+- **Practice Lab**: repeatable seeds, frame stepping, clear/spin fixtures and input diagnostics.
+- **Replays**: local recording, a replay browser and deterministic playback with independent verification tools.
+- **Multiplayer**: server-authoritative rooms for 2–8 players, spectators, optional passwords and rematches. Each room chooses its mode.
+
+No ROM, external font or asset download is needed to play. Graphics and synthesized sounds are original.
+
+## Screenshots
+
+| Classic | Fusion |
+| --- | --- |
+| ![Classic gameplay](docs/images/classic.png) | ![Fusion gameplay](docs/images/fusion.png) |
+| **Modern** | **Replay browser** |
+| ![Modern gameplay](docs/images/modern.png) | ![Replay browser](docs/images/replay-browser.png) |
+
+## Play the release
+
+Extract the entire Windows x64 ZIP into a writable folder and run `stackpulse_client.exe`. Keep its bundled runtime DLLs and `licenses/` directory together. In this working project, the latest extracted release is available at:
+
+```powershell
+.\out\release\stackpulse_client.exe
+```
+
+Choose a mode, then Marathon or Practice. Default controls are **Left/Right** to move, **Down** to soft drop, **X/Z** to rotate and **Escape** to pause. **C** holds in Fusion/Modern; **Space** hard drops in Modern. Menus use Up/Down and Enter. Keyboard and gamepad bindings are configurable in Settings. See the [client guide](apps/client/README.md) for the full controls, replay navigation and save locations.
+
+For local multiplayer, start the dedicated server, then choose Multiplayer in each client:
+
+```powershell
+.\out\release\stackpulse_server.exe
+.\out\release\stackpulse_client.exe --connect 127.0.0.1
+```
+
+The server listens on loopback UDP port **27877** by default. At least two players must join and everyone must ready up to start. To host on a LAN, pass `--bind` with the server's LAN address and allow its UDP port through the host firewall; clients connect to that address. Use `--port N` on both programs to change the port. Public matchmaking and NAT traversal are not supplied.
+
+The separate Linux x64 server archive contains the SDL-free server and command-line tools:
+
+```sh
+./stackpulse_server --bind 127.0.0.1 --port 27877
+```
+
+It requires compatible system glibc, libstdc++, libgcc and an ELF loader. Check the archive's `RUNTIME_DEPENDENCIES.txt` and validate it on the deployment distro. The Windows package includes app-local Visual C++ runtime DLLs; relocated smoke checks do not establish clean-machine compatibility. Package contents, checksums and validation scope are described in [packaging](docs/PACKAGING.md).
+
+## Build from source
+
+Windows prerequisites: Git, Visual Studio 2026 with **Desktop development with C++**, and CMake supporting the **Visual Studio 18 2026** generator. CMake 4.5.0-rc2 was tested on this host; the project's CMake 3.25 minimum also supports older generators. The first configure fetches pinned SDL 3.2.28, Catch2 3.8.1 and ENet 1.3.18 source revisions.
 
 ```powershell
 cmake --preset windows-debug
@@ -11,54 +57,24 @@ ctest --preset windows-debug
 .\out\build\windows-debug\Debug\stackpulse_client.exe
 ```
 
-Choose the MODE row (Enter/confirm cycles Classic, Fusion, Modern), then Marathon or Practice from the home menu. Both Fusion and Modern support C hold; only Modern supports Space hard drop. Fusion uses five previews, Classic uniform RNG/gravity/start-level transitions and wall-charged 16/6 handling; every piece locks on a blocked downward attempt unless the current T position permits a spin, which gets a 30-tick delay with fifteen resets. Fusion spawns each shape with its top occupied cell in row zero; T/J/L spawn and preview flipped like Classic. Modern uses five previews, a ghost, 10/3 handling and a 30-tick lock delay with fifteen resets. In every mode, holding Down through a lock or hold swap does not soft drop the incoming piece; release and press Down again. Default play keys are Left/Right/Down, X clockwise, Z counterclockwise and Escape pause. Menus use Up/Down or W/S and Enter; gamepad navigation and remapping are available. Practice provides restart with the same seed, a new seed, frame stepping, an authored four-line clear fixture and an event timeline. Fusion/Modern Practice uses F7/F8/F9 for playable spin single/double/triple fixtures (press CW then wait to lock), and F10 for an initial-state garbage demo. Practice frame step records the accepted input; fixture/demo restarts record the full initial state. Settings persist keyboard/gamepad bindings, start level and optional left-stick input. Full controls, persistence locations and diagnostics are in the [client guide](apps/client/README.md).
+Visual Studio 2022 users can select `-G "Visual Studio 17 2022"` with the configure preset in a fresh build directory. For a Release build, run `cmake --build out/build/windows-debug --config Release`; the release packaging tool and prerequisites are documented in [PACKAGING.md](docs/PACKAGING.md).
 
-Recordings save the complete initial state and accepted tick inputs. The home menu can load the last replay for playback. The independent verifier accepts an explicit file path:
+Linux development uses Clang, Ninja, CMake and SDL's desktop development prerequisites; [CI](.github/workflows/build.yml) lists the packages used by the Ubuntu build:
 
-```powershell
-.\out\build\windows-debug\Debug\stackpulse_replay_verify.exe C:\path\to\last.spcr
-.\out\build\windows-debug\Debug\stackpulse_diagnostic.exe --smoke-frames 5
-.\out\build\windows-debug\Debug\stackpulse_headless.exe
+```sh
+cmake --preset linux-debug
+cmake --build --preset linux-debug
+ctest --preset linux-debug
 ```
 
-The implemented `SPCR` v1 replay has embedded provisional rules, a complete initial state, periodic/final state hashes and whole-file CRC. Embedded Classic rules/state version 4 includes a per-piece soft-drop release/repress gate and a complete 269-byte initial state; older recordings reject as incompatible. The client has original synthesized movement/rotation and distinct line-clear effects (`--mute` disables audio). SPCR is separate from the unimplemented future `SPR1` replay draft; it has no network events or snapshot seeking. See [replay formats](specs/replay-v1.md). The retained diagnostic measures input bindings and timestamps; its old cursor/headless example remains a separate M0 determinism check.
+The `server` preset builds the SDL-free dedicated server and tools with ENet. The `headless` preset builds dependency-free offline tools with a C++20 compiler and Ninja. `STACKPULSE_BUILD_NETWORK=OFF` omits ENet and online play. Cached dependency sources support later offline builds; `STACKPULSE_FETCH_DEPENDENCIES=OFF` supports installed package configs, but that alternative remains unverified.
 
-Visual Studio 2022 users can override the generator with `cmake --preset windows-debug -G "Visual Studio 17 2022"` in a fresh build directory. Linux uses `linux-debug` presets with Clang, Ninja and SDL's desktop development prerequisites (see CI); local Linux execution is pending. First configuration fetches exact SDL 3.2.28, Catch2 3.8.1 and ENet 1.3.18 source commits. Cached sources permit subsequent offline builds. Set `STACKPULSE_BUILD_NETWORK=OFF` to omit ENet and online play.
+## Compatibility and project docs
 
-Build the independent core, replay library and CLI tools without fetching dependencies:
+Classic records `SPCR` container v1 with provisional rules/state v4. Fusion/Modern record `SPMR` v6. Earlier rules/state identities reject explicitly; recordings are local simulation inputs and cannot reproduce authoritative multiplayer attacks. The separate proposed SPR1 network replay format is not implemented. See the [replay contract](docs/specs/replay-v1.md), [Classic behavior ledger](docs/specs/classic-reference.md) and [current room protocol](src/protocol/README.md).
 
-```powershell
-cmake -S . -B out/core -G "Visual Studio 18 2026" -A x64 -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DSTACKPULSE_BUILD_NETWORK=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
-cmake --build out/core --config Release
-```
-
-On Linux use Ninja instead of the Visual Studio generator. `headless` is the equivalent Ninja preset when a C++20 compiler is already available. `STACKPULSE_FETCH_DEPENDENCIES=OFF` supports installed package configs, including a vcpkg toolchain; that alternative path remains untested. Exact tested dependency revisions and licenses are recorded in CMakeLists.txt and THIRD_PARTY_NOTICES.md.
-
-See [M1 validation and outstanding gates](docs/M1_VALIDATION.md), [historical M0 validation](docs/M0_VALIDATION.md), [design](docs/GAME_DESIGN.md), and [work plan](docs/DEVELOPMENT_PLAN.md). See [M2 validation](docs/M2_VALIDATION.md) for offline mechanics and [historical M3 validation](docs/M3_VALIDATION.md) for the original duel. [M4 validation](docs/M4_VALIDATION.md) covers 2–8-player rooms, spectators, cross-platform determinism and release packaging. Public release services remain future work. No ROM is accessed by the build/tests; no reference trace or physical controller/rolling fidelity approval is claimed.
-
-For local multiplayer start the dedicated server, then run clients in separate terminals. Enter, gamepad South or Start readies each player; all players ready starts a three-second countdown once at least two players have joined. Rooms independently select Classic, Fusion or Modern; the client needs no mode argument to connect.
-
-```powershell
-.\out\build\windows-debug\Debug\stackpulse_server.exe
-.\out\build\windows-debug\Debug\stackpulse_client.exe --connect 127.0.0.1
-```
-
-Home Multiplayer begins with a generated name that can be accepted or edited, then offers Create Lobby and Join Lobby. Create configures name, optional password, player capacity and mode; Join lists server lobbies and requests a password only for a locked selection. The room manager selects starting level 0..29 for Classic/Fusion. CLI equivalents remain `--connect HOST --room CODE --create --spectate --name NAME`. The server defaults to eight players, sixteen spectators and up to eight rooms, with `--players 2..8 --spectators 0..16 --rooms 1..8` to reduce limits. A player join that cannot enter a room reports the reason; explicit spectator mode watches a running match. The connected room manager can return everyone to the lobby after results for a rematch.
-
-Online Classic runs the same authoritative Classic engine as offline play, with one next piece and no hold, hard drop, ghost, kicks or garbage. The leaderboard displays scores; victory follows survival. Fusion and Modern retain their garbage battles.
-
-Use `--port 27877` on both programs to select a port. For LAN play the server explicitly opts into a LAN bind with `--bind 192.168.1.10`; clients use that address. The default listener stays on loopback. F9 reconnects, Escape/Start opens an input-release overlay while the match continues, and F10/Back leaves. Tab/controller right-stick click cycles the target for players or featured board for spectators. Online replay saving is disabled because an offline input-only recording cannot reproduce authoritative opponent attacks. See the [client guide](apps/client/README.md) and [implemented SPD3 revision 4 protocol](src/protocol/README.md). Revision 1/2/3 clients reject rather than silently joining under incompatible messages.
-
-A server build uses no SDL: configure with `STACKPULSE_BUILD_CLIENT=OFF`, or use `cmake --preset server` and `cmake --build --preset server` on a Ninja/C++20 environment. ENet remains its only external runtime dependency. The `headless` preset continues to build dependency-free offline tools.
-
-For a distributable Windows build, build the Release configuration and run the allowlisted [packaging tool](tools/package_release.py) as described in [PACKAGING.md](docs/PACKAGING.md). The ZIP includes the required app-local Visual C++ runtime and dependency licenses, with SHA-256 file hashes. `stackpulse_determinism_matrix` and [its comparison runner](tools/determinism_matrix.py) reproduce the Windows/Linux trace checks. [room_soak.py](tools/room_soak.py) runs the actual-UDP 8-player/16-spectator capacity harness for a measured wall-clock interval.
-
-Issue-7 replay history, Marathon level selection, connection recovery and confirmed multiplayer audio are recorded in [the resolution](docs/issues/issue-7-resolution.md).
-
-Issue-6 random seeds, streamlined menus and Leave Lobby actions are recorded in [the resolution](docs/issues/issue-6-resolution.md). `--seed N` selects an initial solo seed or fixes server match seeds for reproducible checks; normal new runs and matches use random seeds.
-
-Issue-2 gameplay, compatibility and validation are recorded in [the resolution](docs/issues/issue-2-resolution.md).
-
-Issue-1 fixes and validation are recorded in [the resolution](docs/issues/issue-1-resolution.md). See [formatting and opt-in pre-commit checks](docs/FORMATTING.md).
-
-Fusion/Modern recordings use separate `SPMR` v6 files (older v1/v2/v3/v4/v5 recordings reject), with full initial state and exact embedded preset/table identity; current Classic `SPCR` playback uses the v4 rules identity. Verify them with `stackpulse_modern_replay_verify.exe FILE` or client `--verify FILE`. The native home replay action reads the latest compatible recording. Neither codec claims future SPR1 network-event/seek support. `--mode classic|fusion|modern` selects an offline mode at startup; `--capture FILE.bmp --smoke-frames 5` supports automated renderer inspection.
+- [Client guide and controls](apps/client/README.md)
+- [Design](docs/GAME_DESIGN.md) and [development plan](docs/DEVELOPMENT_PLAN.md)
+- Validation records: [M0](docs/M0_VALIDATION.md), [M1](docs/M1_VALIDATION.md), [M2](docs/M2_VALIDATION.md), [M3](docs/M3_VALIDATION.md), [M4](docs/M4_VALIDATION.md)
+- [Contracts and proposed formats](docs/specs/) — individual documents distinguish implemented behavior from drafts
+- [Packaging and release checks](docs/PACKAGING.md), [third-party notices](THIRD_PARTY_NOTICES.md) and [formatting](docs/FORMATTING.md)

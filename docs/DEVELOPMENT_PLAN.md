@@ -22,7 +22,7 @@ src/server/                   # Rooms, deadlines, transport, spectators
 src/replay/                   # Recording, reading, verification
 assets/                       # Original visuals, fonts, audio plus licenses
 rules/                        # Versioned built-in JSON presets
-specs/                        # Frozen tables, interfaces, packet contracts
+docs/specs/                   # Frozen tables, interfaces, packet contracts
 tests/core/                   # Mechanics and match fixtures
 tests/protocol/               # Codec/fuzz tests
 tests/integration/            # Client/server and recovery tests
@@ -50,13 +50,13 @@ Critical path: M0 -> Classic core -> Fusion mechanics -> authoritative duel -> f
 
 M0 must produce these concrete specifications before dependent tasks start:
 
-- `specs/classic-reference.md`: target revision/clock, behavior matrix, provenance, unknowns, approved trace format. Unknowns block only the dependent mechanics, not independent renderer/tool work.
-- `specs/rules-v1.md`: exact board coordinates, geometry/spawn tables, tick order, gravity/delay tables, randomizer algorithm/test vectors, score and top-out rules.
-- `specs/rotation-v1.md`: all orientations, pivots, ordered kick offsets, O/I behavior, successful/failed rotation and spin fixtures.
-- `specs/core-api-v1.md`: complete state/event/input types, capacities, ownership, errors, serialization/hash fields.
-- `specs/protocol-v1.md`: message field widths, channel/delivery choice, limits, tick mapping, missing/late input policy, version negotiation.
-- `specs/replay-v1.md`: header, rules embedding, input/event records, checkpoints, corruption limits, compatibility behavior.
-- `specs/battle-v1.md`: exact cancellation/dispatch/insertion order, targeting RNG, elimination and tie fixtures.
+- `docs/specs/classic-reference.md`: target revision/clock, behavior matrix, provenance, unknowns, approved trace format. Unknowns block only the dependent mechanics, not independent renderer/tool work.
+- `docs/specs/rules-v1.md`: exact board coordinates, geometry/spawn tables, tick order, gravity/delay tables, randomizer algorithm/test vectors, score and top-out rules.
+- `docs/specs/rotation-v1.md`: all orientations, pivots, ordered kick offsets, O/I behavior, successful/failed rotation and spin fixtures.
+- `docs/specs/core-api-v1.md`: complete state/event/input types, capacities, ownership, errors, serialization/hash fields.
+- `docs/specs/protocol-v1.md`: message field widths, channel/delivery choice, limits, tick mapping, missing/late input policy, version negotiation.
+- `docs/specs/replay-v1.md`: header, rules embedding, input/event records, checkpoints, corruption limits, compatibility behavior.
+- `docs/specs/battle-v1.md`: exact cancellation/dispatch/insertion order, targeting RNG, elimination and tie fixtures.
 
 The design contains deliberate hypotheses, particularly Fusion tuning and network lead. M0 translates them into testable v1 contracts; it must not imply that unmeasured NES constants are already settled.
 
@@ -66,7 +66,7 @@ Use one integrator and up to three implementation agents at a time. The lanes be
 
 | Package | Owner / paths | Depends on | Deliverables and acceptance |
 | --- | --- | --- | --- |
-| P00 Foundation | Integrator: root build, public headers, `specs/`, CI | None | Windows/Linux builds; separate core/client/server targets; pinned dependencies; minimal deterministic fixture; format/static-analysis checks |
+| P00 Foundation | Integrator: root build, public headers, `docs/specs/`, CI | None | Windows/Linux builds; separate core/client/server targets; pinned dependencies; minimal deterministic fixture; format/static-analysis checks |
 | P01 Reference specification | Rules researcher: reference spec, `tests/fixtures/classic/`, optional local harness | Target revision identified | Authored traces for motion, DAS, locking, delays, randomization, scoring; unresolved behavior documented; no copied program/assets |
 | P02 Classic core | Simulation owner: `src/core/`, Classic rules data, `tests/core/classic/` | P00, approved parts of P01 | Pure tick simulation, exact state snapshots, Classic fixtures passing; no platform calls |
 | P03 Native input/render shell | Client owner: `src/platform/`, `src/presentation/`, client composition | P00 | Timestamped inputs, controller mapping/hotplug, scaled board, settings UI; runs with fake snapshots while core develops |
