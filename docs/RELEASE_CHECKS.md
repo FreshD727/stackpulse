@@ -1,6 +1,6 @@
 # Private alpha release preparation
 
-Validated on 2026-11-21. This records preparation of local artifacts, not a published GitHub release.
+Validated on 2026-11-21 for the first private prerelease, `v0.1.0-alpha.1`.
 
 ## Changes
 
@@ -24,4 +24,4 @@ The latest extracted Windows build is in `out/release`, including its runtime DL
 
 Issue reports, their images and historical review probes were copied and hash-verified in the project's top-level `issues` folder outside the Git repository before their repository copies were removed. Git history was not rewritten. Specifications moved from `specs` to `docs/specs`; the empty `cmake` directory was removed. Dependency notices and licenses remain intact.
 
-Commits retain the configured Git author. No push, remote visibility change, version tag or GitHub release publication was performed.
+Commits retain the configured Git author. These checks were completed before creating the private GitHub repository and publishing the first prerelease; repository privacy and uploaded asset hashes are verified separately during publication.
