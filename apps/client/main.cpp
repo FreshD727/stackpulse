@@ -143,8 +143,7 @@ std::string number(std::uint64_t value) {
 }
 
 #ifdef STACKPULSE_NETWORK
-// Controller-only defaults connect to the shared localhost room. Text fields also
-// accept keyboard editing; Left/Right selects localhost or the saved recent host.
+// Name acceptance is deliberately separate from lobby discovery.
 std::optional<stackpulse::net::ConnectOptions>
 online_menu(SDL_Renderer* renderer,
             modern::Preset preset,
@@ -155,38 +154,32 @@ online_menu(SDL_Renderer* renderer,
     namespace net = stackpulse::net;
     net::ConnectOptions options;
     options.preset = preset;
+    options.browse_only = true;
     options.name = "Player" + std::to_string(SDL_GetTicks() % 10000);
-    std::string recent = "127.0.0.1";
     std::ifstream saved(preferences);
-    std::getline(saved, recent);
-    if (recent.empty() || recent.size() > 128)
-        recent = "127.0.0.1";
-    std::string port = std::to_string(options.port);
-    int selected = 0, rendered_frames = 0;
-    bool editing = false, done = false, accepted = false;
-    std::string notice = "DEFAULT ROOM: NO CODE NEEDED / 2-8 PLAYERS";
-    std::map<SDL_JoystickID, SDL_Gamepad*> controllers;
+    std::string saved_name;
+    std::getline(saved, options.host);
+    std::getline(saved, saved_name);
+    if (options.host.empty() || options.host.size() > 128)
+        options.host = "127.0.0.1";
+    if (!saved_name.empty() && saved_name.size() <= 24 &&
+        std::all_of(saved_name.begin(), saved_name.end(), [](unsigned char c) {
+            return c >= 32 && c <= 126;
+        }))
+        options.name = saved_name;
+    std::map<SDL_JoystickID, SDL_Gamepad*> pads;
     auto open = [&](SDL_JoystickID id) {
-        if (!controllers.contains(id))
-            if (auto* pad = SDL_OpenGamepad(id))
-                controllers.emplace(id, pad);
+        if (!pads.contains(id))
+            if (auto* p = SDL_OpenGamepad(id))
+                pads[id] = p;
     };
     int count = 0;
     auto* ids = SDL_GetGamepads(&count);
     for (int i = 0; i < count; ++i)
         open(ids[i]);
     SDL_free(ids);
-    auto field = [&]() -> std::string* {
-        if (selected == 0)
-            return &options.host;
-        if (selected == 1)
-            return &port;
-        if (selected == 2)
-            return &options.room_code;
-        if (selected == 4)
-            return &options.name;
-        return nullptr;
-    };
+    int row = 0, frames = 0;
+    bool editing = false, done = false, accepted = false;
     while (!done) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -196,126 +189,74 @@ online_menu(SDL_Renderer* renderer,
             } else if (e.type == SDL_EVENT_GAMEPAD_ADDED)
                 open(e.gdevice.which);
             else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
-                if (auto it = controllers.find(e.gdevice.which); it != controllers.end()) {
+                if (auto it = pads.find(e.gdevice.which); it != pads.end()) {
                     SDL_CloseGamepad(it->second);
-                    controllers.erase(it);
+                    pads.erase(it);
                 }
-            } else if (e.type == SDL_EVENT_TEXT_INPUT && editing) {
-                if (auto* value = field();
-                    value &&
-                    value->size() + std::string(e.text.text).size() <= (selected == 0   ? 128U
-                                                                        : selected == 4 ? 24U
-                                                                        : selected == 2 ? 16U
-                                                                                        : 5U))
-                    *value += e.text.text;
+            } else if (editing && e.type == SDL_EVENT_TEXT_INPUT) {
+                auto& value = row == 1 ? options.name : options.host;
+                const auto limit = row == 1 ? 24U : 128U;
+                for (unsigned char c : std::string(e.text.text))
+                    if (c >= 32 && c <= 126 && value.size() < limit)
+                        value += char(c);
             } else if ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) ||
                        e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-                const bool pad = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
-                const int code = pad ? e.gbutton.button : e.key.scancode;
+                bool pad = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+                int code = pad ? e.gbutton.button : e.key.scancode;
                 auto key = [&](int k, int b) { return code == (pad ? b : k); };
-                if (key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST) ||
-                    (pad && code == SDL_GAMEPAD_BUTTON_BACK)) {
+                if (key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST)) {
                     if (editing) {
                         editing = false;
                         SDL_StopTextInput(SDL_GetRenderWindow(renderer));
                     } else
                         done = true;
                 } else if (editing) {
+                    if (!pad && code == SDL_SCANCODE_BACKSPACE) {
+                        auto& value = row == 1 ? options.name : options.host;
+                        if (!value.empty())
+                            value.pop_back();
+                    }
                     if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH)) {
                         editing = false;
                         SDL_StopTextInput(SDL_GetRenderWindow(renderer));
-                    } else if (!pad && code == SDL_SCANCODE_BACKSPACE) {
-                        if (auto* value = field(); value && !value->empty()) {
-                            auto at = value->size() - 1;
-                            while (at && (static_cast<unsigned char>((*value)[at]) & 0xc0) == 0x80)
-                                --at;
-                            value->erase(at);
-                        }
                     }
                 } else if (key(SDL_SCANCODE_UP, SDL_GAMEPAD_BUTTON_DPAD_UP))
-                    selected = (selected + 8) % 9;
+                    row = (row + 2) % 3;
                 else if (key(SDL_SCANCODE_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
-                    selected = (selected + 1) % 9;
-                else if (key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT) ||
-                         key(SDL_SCANCODE_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) {
-                    if (selected == 0)
-                        options.host = options.host == "127.0.0.1" ? recent : "127.0.0.1";
-                    else if (selected == 1) {
-                        unsigned value = options.port;
-                        value = key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT)
-                                    ? (value > 1 ? value - 1 : 65535)
-                                    : (value < 65535 ? value + 1 : 1);
-                        options.port = static_cast<std::uint16_t>(value);
-                        port = std::to_string(value);
-                    } else if (selected == 2)
-                        options.room_code.clear();
-                    else if (selected == 3)
-                        options.role = options.role == net::Role::player ? net::Role::spectator
-                                                                         : net::Role::player;
-                } else if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH)) {
-                    if (selected == 3)
-                        options.role = options.role == net::Role::player ? net::Role::spectator
-                                                                         : net::Role::player;
-                    else if (selected == 8)
-                        done = true;
-                    else if (selected >= 5) {
-                        unsigned value = 0;
-                        auto parsed =
-                            std::from_chars(port.data(), port.data() + port.size(), value);
-                        if (options.host.empty() || options.name.empty() ||
-                            parsed.ec != std::errc{} || parsed.ptr != port.data() + port.size() ||
-                            !value || value > 65535) {
-                            notice = "ENTER AN ADDRESS, NAME AND PORT 1-65535";
-                            continue;
-                        }
-                        options.port = static_cast<std::uint16_t>(value);
-                        options.create_room = selected == 6;
-                        if (selected == 7)
-                            options.role = net::Role::spectator;
-                        std::ofstream save(preferences);
-                        save << options.host << '\n';
+                    row = (row + 1) % 3;
+                else if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH) ||
+                         (pad && code == SDL_GAMEPAD_BUTTON_START)) {
+                    if (row == 0 && !options.name.empty() && !options.host.empty()) {
                         accepted = true;
                         done = true;
-                    } else if (!pad) {
+                    } else {
                         editing = true;
                         SDL_StartTextInput(SDL_GetRenderWindow(renderer));
-                    } else
-                        notice = "LEFT/RIGHT: PRESETS / KEYBOARD ENTER: EDIT TEXT";
+                    }
                 }
             }
         }
         color(renderer, {9, 15, 27, 255});
         SDL_RenderClear(renderer);
-        text(renderer, 24, 18, "MULTIPLAYER / ROOM CONNECTION", mint);
-        const std::array<std::string, 9> rows{
-            "SERVER: " + options.host,
-            "PORT: " + port,
-            "ROOM: " + (options.room_code.empty() ? std::string("DEFAULT") : options.room_code),
-            std::string("ROLE: ") + (options.role == net::Role::player ? "PLAYER" : "SPECTATOR"),
-            "NAME: " + options.name,
-            "JOIN ROOM",
-            "CREATE PRIVATE ROOM",
-            "WATCH ROOM",
-            "BACK"};
-        for (int i = 0; i < 9; ++i)
+        text(renderer, 40, 44, "WELCOME / " + options.name, mint);
+        std::array<std::string, 3> rows{
+            "ACCEPT NAME", "CHOOSE NAME: " + options.name, "SERVER: " + options.host};
+        for (int i = 0; i < 3; ++i)
             text(renderer,
-                 28,
-                 53.F + i * 25.F,
-                 std::string(selected == i ? "> " : "  ") + rows[i].substr(0, 68),
-                 selected == i ? mint : ink);
+                 40,
+                 100.F + i * 36.F,
+                 std::string(row == i ? "> " : "  ") + rows[i],
+                 row == i ? mint : ink);
         text(renderer,
-             24,
-             291,
-             editing ? "EDITING / ENTER DONE / BACKSPACE ERASE"
-                     : "UP/DOWN SELECT / ENTER OR SOUTH CONFIRM",
+             40,
+             260,
+             editing ? "TYPE / ENTER DONE / BACKSPACE ERASE" : "ENTER / SOUTH / START: CONTINUE",
              muted);
-        text(renderer, 24, 308, "LEFT/RIGHT CHANGE / ESC OR EAST BACK", muted);
-        text(renderer, 24, 333, notice.substr(0, 73), mint);
-        if (smoke_frames && ++rendered_frames >= smoke_frames) {
+        if (smoke_frames && ++frames >= smoke_frames) {
             if (!capture_path.empty()) {
-                SDL_Surface* capture = SDL_RenderReadPixels(renderer, nullptr);
-                if (!capture || !SDL_SaveBMP(capture, capture_path.string().c_str()))
-                    std::fprintf(stderr, "Menu capture: %s\n", SDL_GetError());
+                auto* capture = SDL_RenderReadPixels(renderer, nullptr);
+                if (capture)
+                    SDL_SaveBMP(capture, capture_path.string().c_str());
                 SDL_DestroySurface(capture);
             }
             done = true;
@@ -324,12 +265,15 @@ online_menu(SDL_Renderer* renderer,
         SDL_Delay(8);
     }
     SDL_StopTextInput(SDL_GetRenderWindow(renderer));
-    for (auto [id, pad] : controllers) {
+    for (auto [id, pad] : pads) {
         (void)id;
         SDL_CloseGamepad(pad);
     }
-    if (accepted)
+    if (accepted) {
+        std::ofstream save(preferences);
+        save << options.host << '\n' << options.name << '\n';
         return options;
+    }
     return {};
 }
 int run_online(SDL_Renderer* renderer,
@@ -343,7 +287,8 @@ int run_online(SDL_Renderer* renderer,
                const std::filesystem::path& capture_path = {},
                const stackpulse::net::ConnectOptions* room_options = nullptr,
                std::uint64_t capture_tick = 0,
-               std::uint64_t ready_delay_ms = 0) {
+               std::uint64_t ready_delay_ms = 0,
+               const std::string& smoke_lobby_stage = {}) {
     namespace net = stackpulse::net;
     net::Client connection;
     client::OnlinePrediction prediction;
@@ -355,7 +300,7 @@ int run_online(SDL_Renderer* renderer,
         options.port = port;
         options.preset = preset;
     }
-    if (!connection.connect(options)) {
+    if (smoke_lobby_stage.empty() && !connection.connect(options)) {
         std::fprintf(stderr, "Online connection: %s\n", connection.view().detail.c_str());
         return 1;
     }
@@ -377,8 +322,27 @@ int run_online(SDL_Renderer* renderer,
     std::uint64_t result_time = 0, snapshot_time = boundary, clock_tick = 0;
     std::uint64_t previous_revision = 0, room_epoch = 0, match_epoch = 0;
     std::uint16_t previous_player = 0, featured = 0;
+    modern::Preset epoch_preset = preset;
+    std::uint8_t epoch_start_level = 0;
     bool target_held = false;
     int overlay_selection = 0;
+    enum class LobbyPage { choice, create, browse, password };
+    LobbyPage lobby_page = smoke_lobby_stage == "create" ? LobbyPage::create : LobbyPage::choice;
+    int smoke_lobby_frames = 0;
+    net::RoomOptions draft;
+    draft.preset = preset;
+    int lobby_row = 0;
+    std::string password;
+    client::RoomSelection room_selection;
+    bool lobby_editing = false, help = false;
+    std::uint64_t directory_refresh = 0;
+    auto lobby_field = [&]() -> std::string* {
+        if (lobby_page == LobbyPage::password)
+            return &password;
+        if (lobby_page == LobbyPage::create && lobby_row < 2)
+            return lobby_row == 0 ? &draft.name : &draft.password;
+        return nullptr;
+    };
     bool live_captured = false;
     bool running = true, focused = true, overlay = false, terminal = false,
          quit_application = false, ready_requested = false;
@@ -434,7 +398,7 @@ int run_online(SDL_Renderer* renderer,
                     SDL_RenderRect(renderer, &outline);
                 }
         }
-        if (!board.game_over)
+        if (!board.game_over && (!board.classic_state || board.classic_state->entry_timer == 0))
             for (auto c : modern::cells(board.active))
                 if (c.y >= 0 && c.y < 20)
                     block(renderer,
@@ -445,16 +409,27 @@ int run_online(SDL_Renderer* renderer,
                           cell);
     };
     while (running) {
-        connection.poll();
+        if (smoke_lobby_stage.empty())
+            connection.poll();
         const auto now = SDL_GetTicksNS();
         const auto& view = connection.view();
+        if (view.room_id)
+            preset = view.room.preset;
+        if (view.phase == net::Phase::browsing && now >= directory_refresh) {
+            connection.list_rooms();
+            directory_refresh = now + 2'000'000'000;
+        }
         if (room_epoch != view.room_id || match_epoch != view.match_id ||
+            (view.room_id &&
+             (epoch_preset != view.room.preset || epoch_start_level != view.room.start_level)) ||
             previous_player != view.player || view.phase == net::Phase::disconnected ||
             view.phase == net::Phase::error) {
             prediction.reset();
             input = in::Adapter{};
             target_held = false;
             room_epoch = view.room_id;
+            epoch_preset = view.room.preset;
+            epoch_start_level = view.room.start_level;
             match_epoch = view.match_id;
             previous_player = view.player;
             previous_revision = 0;
@@ -499,6 +474,11 @@ int run_online(SDL_Renderer* renderer,
                     SDL_CloseGamepad(it->second.handle);
                     pads.erase(it);
                 }
+            } else if (event.type == SDL_EVENT_TEXT_INPUT && lobby_editing) {
+                if (auto* value = lobby_field())
+                    for (unsigned char c : std::string(event.text.text))
+                        if (c >= 32 && c <= 126 && value->size() < 24)
+                            *value += char(c);
             } else if (event.type == SDL_EVENT_KEYBOARD_REMOVED) {
                 target_held = false;
                 input.release_device(std::max(event.kdevice.timestamp, boundary + 1),
@@ -512,6 +492,120 @@ int run_online(SDL_Renderer* renderer,
                 const int code = pad ? event.gbutton.button : event.key.scancode;
                 if ((!pad && event.key.repeat) || (!focused && !bot))
                     continue;
+                if (down && !pad && code == SDL_SCANCODE_F1) {
+                    help = !help;
+                    continue;
+                }
+                if (view.phase == net::Phase::browsing) {
+                    if (!down)
+                        continue;
+                    auto key = [&](int k, int b) { return code == (pad ? b : k); };
+                    if (lobby_editing) {
+                        if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH) ||
+                            key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST)) {
+                            lobby_editing = false;
+                            SDL_StopTextInput(SDL_GetRenderWindow(renderer));
+                        } else if (!pad && code == SDL_SCANCODE_BACKSPACE) {
+                            if (auto* value = lobby_field(); value && !value->empty())
+                                value->pop_back();
+                        }
+                        continue;
+                    }
+                    if (key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST)) {
+                        lobby_page = LobbyPage::choice;
+                        lobby_row = 0;
+                        continue;
+                    }
+                    int rows = lobby_page == LobbyPage::choice   ? 3
+                               : lobby_page == LobbyPage::create ? 7
+                               : lobby_page == LobbyPage::password
+                                   ? 2
+                                   : static_cast<int>(view.rooms.size()) + 1;
+                    if (key(SDL_SCANCODE_UP, SDL_GAMEPAD_BUTTON_DPAD_UP))
+                        lobby_row = (lobby_row + rows - 1) % rows;
+                    else if (key(SDL_SCANCODE_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
+                        lobby_row = (lobby_row + 1) % rows;
+                    else if (lobby_page == LobbyPage::create &&
+                             (key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT) ||
+                              key(SDL_SCANCODE_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT))) {
+                        int delta = key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT) ? -1 : 1;
+                        if (lobby_row == 2)
+                            draft.players = static_cast<std::uint8_t>(
+                                std::clamp(int(draft.players) + delta, 2, 8));
+                        if (lobby_row == 3)
+                            draft.preset =
+                                static_cast<modern::Preset>((int(draft.preset) + delta + 3) % 3);
+                        if (lobby_row == 4)
+                            draft.start_level = static_cast<std::uint8_t>(
+                                std::clamp(int(draft.start_level) + delta, 0, 29));
+                    } else if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH) ||
+                               (pad && code == SDL_GAMEPAD_BUTTON_START)) {
+                        if (lobby_page == LobbyPage::choice) {
+                            if (lobby_row == 2) {
+                                running = false;
+                                continue;
+                            }
+                            lobby_page = lobby_row == 0 ? LobbyPage::create : LobbyPage::browse;
+                            lobby_row = 0;
+                            connection.list_rooms();
+                        } else if (lobby_page == LobbyPage::create) {
+                            if (lobby_row < 2) {
+                                lobby_editing = true;
+                                SDL_StartTextInput(SDL_GetRenderWindow(renderer));
+                            } else if (lobby_row == 5 && !draft.name.empty()) {
+                                if (draft.preset == modern::Preset::modern)
+                                    draft.start_level = 0;
+                                connection.create_room(draft);
+                            } else if (lobby_row == 6) {
+                                lobby_page = LobbyPage::choice;
+                                lobby_row = 0;
+                            }
+                        } else if (lobby_page == LobbyPage::browse) {
+                            if (lobby_row >= static_cast<int>(view.rooms.size())) {
+                                connection.list_rooms();
+                                continue;
+                            }
+                            const auto& room = view.rooms[static_cast<std::size_t>(lobby_row)];
+                            room_selection.choose(room, net::Role::player);
+                            password.clear();
+                            if (room.password_required) {
+                                lobby_page = LobbyPage::password;
+                                lobby_row = 0;
+                            } else
+                                room_selection.confirm(connection, "");
+                        } else if (lobby_row == 0) {
+                            lobby_editing = true;
+                            SDL_StartTextInput(SDL_GetRenderWindow(renderer));
+                        } else
+                            room_selection.confirm(connection, password);
+                    } else if (lobby_page == LobbyPage::browse &&
+                               ((!pad && code == SDL_SCANCODE_W) ||
+                                (pad && code == SDL_GAMEPAD_BUTTON_WEST)) &&
+                               lobby_row < static_cast<int>(view.rooms.size())) {
+                        const auto& room = view.rooms[static_cast<std::size_t>(lobby_row)];
+                        room_selection.choose(room, net::Role::spectator);
+                        password.clear();
+                        if (room.password_required) {
+                            lobby_page = LobbyPage::password;
+                            lobby_row = 0;
+                        } else
+                            room_selection.confirm(connection, "");
+                    }
+                    continue;
+                }
+                if (down && view.phase == net::Phase::waiting &&
+                    view.member_id == view.manager_id && preset != modern::Preset::modern &&
+                    ((!pad && (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT)) ||
+                     (pad && (code == SDL_GAMEPAD_BUTTON_DPAD_LEFT ||
+                              code == SDL_GAMEPAD_BUTTON_DPAD_RIGHT)))) {
+                    auto updated = view.room;
+                    bool left =
+                        pad ? code == SDL_GAMEPAD_BUTTON_DPAD_LEFT : code == SDL_SCANCODE_LEFT;
+                    updated.start_level = static_cast<std::uint8_t>(
+                        std::clamp(int(updated.start_level) + (left ? -1 : 1), 0, 29));
+                    connection.configure_room(updated);
+                    continue;
+                }
                 if ((!pad && code == SDL_SCANCODE_TAB) ||
                     (pad && code == SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
                     target_held = down;
@@ -564,7 +658,8 @@ int run_online(SDL_Renderer* renderer,
                         continue;
                     }
                     if ((!pad && code == SDL_SCANCODE_RETURN) ||
-                        (pad && code == SDL_GAMEPAD_BUTTON_SOUTH &&
+                        (pad &&
+                         (code == SDL_GAMEPAD_BUTTON_SOUTH || code == SDL_GAMEPAD_BUTTON_START) &&
                          (view.phase == net::Phase::waiting ||
                           view.phase == net::Phase::results))) {
                         if (view.phase == net::Phase::results) {
@@ -630,7 +725,7 @@ int run_online(SDL_Renderer* renderer,
                 mask |= modern::target_next;
             if (bot) {
                 const auto tick = prediction.board().tick;
-                mask = modern::down;
+                mask = tick % 4 < 2 ? modern::down : 0U;
                 if (preset == modern::Preset::modern && tick % 8 == 0)
                     mask |= modern::hard_drop;
             }
@@ -681,29 +776,33 @@ int run_online(SDL_Renderer* renderer,
             running = false;
         color(renderer, {9, 15, 27, 255});
         SDL_RenderClear(renderer);
-        text(renderer, 20, 14, "STACKPULSE / AUTHORITATIVE ROOM", mint);
-        text(renderer,
-             20,
-             32,
-             std::string(preset == modern::Preset::fusion ? "FUSION" : "MODERN") + " / " + host +
-                 ":" + number(port),
-             muted);
-        const std::array<const char*, 8> phases{"CONNECTING",
-                                                "WAITING",
-                                                "COUNTDOWN",
-                                                "PLAYING",
-                                                "RESULTS",
-                                                "DISCONNECTED",
-                                                "ERROR",
-                                                "?"};
-        text(renderer, 360, 14, phases[static_cast<std::size_t>(view.phase)], mint);
-        text(renderer,
-             360,
-             32,
-             (view.role == net::Role::spectator ? std::string("SPECTATOR")
-                                                : "PLAYER " + number(view.player)) +
-                 " / SERVER " + number(view.server_tick),
-             muted);
+        text(renderer, 20, 14, "STACKPULSE", mint);
+        if (view.phase != net::Phase::browsing && smoke_lobby_stage.empty()) {
+            text(renderer,
+                 20,
+                 32,
+                 std::string(preset == modern::Preset::classic  ? "CLASSIC"
+                             : preset == modern::Preset::fusion ? "FUSION"
+                                                                : "MODERN") +
+                     " / " + view.room.name,
+                 muted);
+            const std::array<const char*, 8> phases{"CONNECTING",
+                                                    "WAITING",
+                                                    "COUNTDOWN",
+                                                    "PLAYING",
+                                                    "RESULTS",
+                                                    "DISCONNECTED",
+                                                    "ERROR",
+                                                    "LOBBIES"};
+            text(renderer, 360, 14, phases[static_cast<std::size_t>(view.phase)], mint);
+            text(renderer,
+                 360,
+                 32,
+                 (view.role == net::Role::spectator ? std::string("SPECTATOR")
+                                                    : "PLAYER " + number(view.player)) +
+                     "",
+                 muted);
+        }
         const bool watching = view.role == net::Role::spectator;
         const modern::State* main_board = prediction.initialized() ? &prediction.board() : nullptr;
         std::uint16_t main_id = view.player;
@@ -727,43 +826,45 @@ int run_online(SDL_Renderer* renderer,
             for (const auto& player : view.authoritative.players)
                 if (player.id == view.player)
                     selected_target = player.target;
-        text(renderer, 16, 58, watching ? "SPECTATING" : "LOCAL PREDICTED", mint);
+        text(renderer, 16, 58, "LEADERBOARD", mint);
         if (main_board) {
             draw_board(*main_board, 165, 74, 12, !watching);
             text(renderer, 165, 57, player_label(main_id).substr(0, 16), mint);
-            text(renderer, 16, 83, "SCORE " + number(main_board->score));
-            text(renderer, 16, 101, "LINES " + number(main_board->lines));
-            unsigned incoming = 0;
-            for (const auto& packet : main_board->incoming)
-                incoming += packet.rows;
-            text(renderer, 16, 119, "INCOMING " + number(incoming), mint);
-            text(renderer, 16, 143, main_board->hold_used ? "HOLD USED" : "HOLD", muted);
-            if (main_board->has_hold)
+            text(renderer,
+                 165,
+                 320,
+                 "SCORE " + number(main_board->score) + " / LEVEL " +
+                     number(modern::level(*main_board)));
+            if (preset != modern::Preset::classic)
+                text(renderer, 16, 268, main_board->hold_used ? "HOLD USED" : "HOLD", muted);
+            if (preset != modern::Preset::classic && main_board->has_hold)
                 for (auto c : modern::cells(
                          {main_board->held_piece,
                           modern::spawn_rotation(main_board->held_piece, main_board->preset),
                           0,
                           0}))
                     block(renderer,
-                          92 + c.x * 7.F,
-                          141 + c.y * 7.F,
+                          24 + c.x * 7.F,
+                          287 + c.y * 7.F,
                           client::classic_palette_piece(main_board->held_piece),
                           modern::gravity_interval(*main_board),
                           7);
-            text(renderer, 16, 174, "NEXT", muted);
-            for (std::size_t i = 0; i < main_board->next.size(); ++i)
+            text(renderer, 300, 58, "NEXT", muted);
+            for (std::size_t i = 0;
+                 i < (preset == modern::Preset::classic ? 1U : main_board->next.size());
+                 ++i)
                 for (auto c :
                      modern::cells({main_board->next[i],
                                     modern::spawn_rotation(main_board->next[i], main_board->preset),
                                     0,
                                     0}))
                     block(renderer,
-                          23 + c.x * 7.F,
-                          192 + static_cast<float>(i) * 24 + c.y * 7.F,
+                          300 + c.x * 7.F,
+                          80 + static_cast<float>(i) * 24 + c.y * 7.F,
                           client::classic_palette_piece(main_board->next[i]),
                           modern::gravity_interval(*main_board),
                           7);
-            if (!watching && selected_target)
+            if (help && preset != modern::Preset::classic && !watching && selected_target)
                 text(renderer,
                      165,
                      318,
@@ -772,18 +873,42 @@ int run_online(SDL_Renderer* renderer,
         } else
             text(renderer, 165, 100, "AWAITING SNAPSHOT", muted);
         if (view.has_snapshot) {
+            int rank = 0;
+            for (const auto& player : client::leaderboard(view)) {
+                const bool disconnected = player.status == client::PlayerStatus::disconnected;
+                const bool out = player.status == client::PlayerStatus::out;
+                std::string status = disconnected ? "DISCONNECTED" : out ? "OUT" : "";
+                auto tint = disconnected ? SDL_Color{255, 174, 93, 255}
+                            : out        ? SDL_Color{239, 125, 145, 255}
+                                         : ink;
+                ++rank;
+                text(renderer,
+                     16,
+                     60.F + rank * 22.F,
+                     number(rank) + " " +
+                         player.name.substr(
+                             0, std::min<std::size_t>(10, 14 - number(player.score).size())) +
+                         " " + number(player.score),
+                     tint);
+                if (!status.empty())
+                    text(renderer, 24, 72.F + rank * 22.F, status, tint);
+            }
             unsigned slot = 0;
             for (const auto& opponent : view.authoritative.players) {
                 if (opponent.id == main_id)
                     continue;
-                const float x = 316.F + (slot % 4) * 79.F;
+                const float x = 365.F + (slot % 4) * 68.F;
                 const float y = 76.F + (slot / 4) * 130.F;
-                draw_board(opponent.board, x, y, 5.5F);
+                draw_board(opponent.board, x, y, 5.F);
                 const bool targeted = opponent.id == selected_target;
+                std::string heading =
+                    (targeted ? std::string(">P") : std::string("P")) + number(opponent.id);
+                if (heading.size() < 6)
+                    heading += " " + player_label(opponent.id).substr(0, 6 - heading.size());
                 text(renderer,
                      x,
                      y - 14,
-                     (targeted ? "> " : "") + player_label(opponent.id).substr(0, targeted ? 7 : 9),
+                     heading,
                      targeted                   ? SDL_Color{255, 205, 92, 255}
                      : opponent.board.game_over ? muted
                                                 : mint);
@@ -819,8 +944,8 @@ int run_online(SDL_Renderer* renderer,
                      32,
                      85,
                      watching     ? "WATCHING / WAIT FOR PLAYERS"
-                     : view.ready ? "READY / ENTER OR SOUTH TO CANCEL"
-                                  : "ENTER / SOUTH: READY",
+                     : view.ready ? "READY / START TO CANCEL"
+                                  : "ENTER / SOUTH / START: READY",
                      mint);
             const auto manager =
                 std::find_if(view.members.begin(), view.members.end(), [&](const auto& member) {
@@ -830,7 +955,7 @@ int run_online(SDL_Renderer* renderer,
                 text(renderer,
                      32,
                      119,
-                     "MANAGER: " + manager->name.substr(0, 24) +
+                     "MANAGER: " + manager->name.substr(0, 16) +
                          (manager->role == net::Role::spectator ? " / SPECTATOR" : " / PLAYER"),
                      muted);
             unsigned row = 0, spectators = 0;
@@ -861,8 +986,67 @@ int run_online(SDL_Renderer* renderer,
             text(renderer,
                  32,
                  298,
-                 "ALL PLAYERS READY (2+) / MANAGER RETURNS ROOM AFTER RESULT",
+                 preset != modern::Preset::modern
+                     ? "START LEVEL " + number(view.room.start_level) +
+                           (view.member_id == view.manager_id ? " / LEFT-RIGHT CHANGE"
+                                                              : " / MANAGER SETS LEVEL")
+                     : "ALL PLAYERS READY TO START",
                  muted);
+        }
+        if (view.phase == net::Phase::browsing || !smoke_lobby_stage.empty()) {
+            rect(renderer, 0, 50, 640, 290, {9, 15, 27, 255});
+            std::vector<std::string> rows;
+            std::string title;
+            auto mode_label = [](modern::Preset mode) {
+                return mode == modern::Preset::classic  ? "CLASSIC"
+                       : mode == modern::Preset::fusion ? "FUSION"
+                                                        : "MODERN";
+            };
+            if (lobby_page == LobbyPage::choice) {
+                title = "MULTIPLAYER";
+                rows = {"CREATE LOBBY", "JOIN LOBBY", "BACK"};
+            } else if (lobby_page == LobbyPage::create) {
+                title = "CREATE LOBBY";
+                rows = {"NAME: " + draft.name,
+                        "PASSWORD: " + std::string(draft.password.size(), '*'),
+                        "MAX PLAYERS: " + number(draft.players),
+                        std::string("MODE: ") + mode_label(draft.preset),
+                        draft.preset == modern::Preset::modern
+                            ? "LEVEL: AUTOMATIC"
+                            : "START LEVEL: " + number(draft.start_level),
+                        "CREATE",
+                        "BACK"};
+            } else if (lobby_page == LobbyPage::password) {
+                title = room_selection.role == net::Role::spectator ? "WATCH / LOCKED LOBBY"
+                                                                    : "JOIN / LOCKED LOBBY";
+                rows = {"PASSWORD: " + std::string(password.size(), '*'), "CONFIRM"};
+            } else {
+                title = "JOIN LOBBY";
+                for (const auto& room : view.rooms)
+                    rows.push_back(room.name.substr(0, 18) + " / " + mode_label(room.preset) +
+                                   " / " + number(room.players) + "/" + number(room.capacity) +
+                                   (room.state == net::Phase::waiting ? " OPEN" : " IN MATCH") +
+                                   (room.password_required ? " [LOCK]" : ""));
+                rows.push_back("REFRESH");
+            }
+            text(renderer, 32, 60, title, mint);
+            int first = std::max(0, lobby_row - 5);
+            for (int i = first; i < static_cast<int>(rows.size()) && i < first + 7; ++i)
+                text(renderer,
+                     32,
+                     92.F + (i - first) * 26.F,
+                     std::string(i == lobby_row ? "> " : "  ") + rows[i],
+                     i == lobby_row ? mint : ink);
+            text(renderer,
+                 32,
+                 291,
+                 lobby_editing ? "TYPE / ENTER DONE"
+                               : "UP/DOWN SELECT / LEFT/RIGHT CHANGE / SOUTH CONFIRM",
+                 muted);
+            if (lobby_page == LobbyPage::browse)
+                text(renderer, 32, 308, "ENTER / SOUTH: JOIN PLAYER   W / WEST: WATCH", muted);
+            if (!view.operation_error.empty())
+                text(renderer, 32, 327, view.operation_error.substr(0, 74), {255, 174, 93, 255});
         }
         if (overlay) {
             rect(renderer, 306, 103, 314, 130, {26, 61, 65, 255});
@@ -876,14 +1060,18 @@ int run_online(SDL_Renderer* renderer,
                      overlay_selection == i ? mint : ink);
             text(renderer, 318, 215, "UP/DOWN / SOUTH OR ENTER", muted);
         }
-        text(renderer, 16, 329, "F9 RECONNECT / ESC-START MENU", muted);
-        text(renderer,
-             320,
-             329,
-             watching ? "TAB / R-STICK: FEATURE" : "TAB / R-STICK: TARGET",
-             muted);
+        if (help)
+            text(renderer, 16, 337, "F9 RECONNECT / ESC-START MENU", muted);
+        if (help && preset != modern::Preset::classic)
+            text(renderer,
+                 320,
+                 337,
+                 watching ? "TAB / R-STICK: FEATURE" : "TAB / R-STICK: TARGET",
+                 muted);
         rect(renderer, 0, 345, 640, 15, {19, 33, 49, 255});
-        text(renderer, 8, 349, view.detail.substr(0, 76), mint);
+        text(renderer, 8, 349, help ? view.detail.substr(0, 76) : "F1 HELP", muted);
+        if (!smoke_lobby_stage.empty() && ++smoke_lobby_frames >= 8)
+            running = false;
         const bool capture_live = capture_tick && !live_captured &&
                                   view.phase == net::Phase::playing &&
                                   view.server_tick >= capture_tick;
@@ -943,13 +1131,20 @@ int main(int argc, char** argv) {
     std::uint16_t online_port = 27877;
     std::uint64_t online_exit_ticks = 0, online_capture_tick = 0, online_ready_delay_ms = 0;
     bool smoke_multiplayer_menu = false;
+    std::string smoke_lobby_stage;
     bool online_bot = false, online_spectate = false, online_create = false;
     std::string online_room, online_name = "Player";
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--connect" && i + 1 < argc)
             online_host = argv[++i];
-        else if (arg == "--smoke-multiplayer-menu")
+        else if (arg == "--smoke-lobby-stage" && i + 1 < argc) {
+            smoke_lobby_stage = argv[++i];
+            if (smoke_lobby_stage != "choice" && smoke_lobby_stage != "create")
+                return 2;
+            if (online_host.empty())
+                online_host = "127.0.0.1";
+        } else if (arg == "--smoke-multiplayer-menu")
             smoke_multiplayer_menu = true;
         else if (arg == "--spectate")
             online_spectate = true;
@@ -1024,8 +1219,6 @@ int main(int argc, char** argv) {
             return 2;
         }
     }
-    if (!online_host.empty() && mode == 0)
-        mode = 1;
 #ifndef STACKPULSE_NETWORK
     if (!online_host.empty() || online_bot || online_exit_ticks || online_capture_tick ||
         smoke_multiplayer_menu) {
@@ -1126,24 +1319,28 @@ int main(int argc, char** argv) {
         stackpulse::net::ConnectOptions room_options;
         room_options.host = online_host;
         room_options.port = online_port;
-        room_options.preset = mode == 1 ? modern::Preset::fusion : modern::Preset::modern;
+        room_options.preset = mode == 0   ? modern::Preset::classic
+                              : mode == 1 ? modern::Preset::fusion
+                                          : modern::Preset::modern;
         room_options.role =
             online_spectate ? stackpulse::net::Role::spectator : stackpulse::net::Role::player;
         room_options.name = online_name;
         room_options.room_code = online_room;
         room_options.create_room = online_create;
+        room_options.browse_only = !smoke_lobby_stage.empty();
         const auto result = run_online(renderer,
                                        settings,
                                        audio,
                                        online_host,
                                        online_port,
-                                       mode == 1 ? modern::Preset::fusion : modern::Preset::modern,
+                                       room_options.preset,
                                        online_bot,
                                        online_exit_ticks,
                                        capture_path,
                                        &room_options,
                                        online_capture_tick,
-                                       online_ready_delay_ms);
+                                       online_ready_delay_ms,
+                                       smoke_lobby_stage);
         audio.shutdown();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -1170,6 +1367,7 @@ int main(int argc, char** argv) {
     std::uint64_t late = 0, overload = 0;
     int frames = 0, selection = 0, settings_row = 0, capture = -1;
     bool running = true, focused = true, practice = false, playback = false, step_once = false;
+    bool help = false;
     bool spin_debug = false;
     std::uint8_t spin_debug_rotation = 0;
     Screen screen = Screen::home, settings_return = Screen::home;
@@ -1628,7 +1826,7 @@ int main(int argc, char** argv) {
                         break;
                     }
                     if (code == SDL_SCANCODE_F1) {
-                        pause();
+                        help = !help;
                         break;
                     }
                     if (code == SDL_SCANCODE_F2 && !playback) {
@@ -1865,9 +2063,8 @@ int main(int argc, char** argv) {
         for (int line = 0; line < 12; ++line)
             rect(renderer, 0, static_cast<float>(line * 32), 640, 1, {13, 23, 38, 255});
         text(renderer, 20, 15, "STACKPULSE", mint);
-        text(renderer, 20, 31, mode_name() + " / PROVISIONAL", muted);
-        text(renderer, 368, 15, "PROVISIONAL RULES / 60 Hz", muted);
-        text(renderer, 368, 31, "NO REFERENCE FIDELITY CLAIM", muted);
+        text(renderer, 20, 31, mode_name(), muted);
+        text(renderer, 548, 31, "F1 HELP", muted);
         rect(renderer, 18, 50, 604, 1, {48, 66, 88, 255});
         if (screen == Screen::home) {
             text(renderer, 36, 77, "BUILD. CLEAR. FIND YOUR RHYTHM.", ink);
@@ -1900,9 +2097,11 @@ int main(int argc, char** argv) {
                  mode == 2   ? "HARD DROP / SRS KICKS"
                  : mode == 1 ? "SRS / LOCAL SPIN LOCK"
                              : "NO HOLD / GHOST / KICKS");
-            text(renderer, 382, 202, "PRACTICE TOOLS", mint);
-            text(renderer, 382, 225, "SEEDS / FRAME STEP");
-            text(renderer, 382, 244, mode ? "F7-9 SPINS / F10 GARBAGE" : "FOUR-LINE FIXTURE");
+            if (help) {
+                text(renderer, 382, 202, "PRACTICE TOOLS", mint);
+                text(renderer, 382, 225, "SEEDS / FRAME STEP");
+                text(renderer, 382, 244, mode ? "F7-9 SPINS / F10 GARBAGE" : "FOUR-LINE FIXTURE");
+            }
             text(renderer, 36, 294, "ARROWS OR W/S + ENTER / D-PAD + SOUTH", muted);
         } else if (screen == Screen::settings) {
             text(renderer, 30, 65, "CONTROLS / SELECT TO REMAP", mint);
@@ -2000,10 +2199,12 @@ int main(int argc, char** argv) {
             text(renderer, 20, 154, number(state.lines));
             text(renderer, 20, 182, "LEVEL", muted);
             text(renderer, 20, 197, number(state.level));
-            text(renderer, 20, 225, "SEED", muted);
-            text(renderer, 20, 240, playback ? "RECORDED" : number(seed));
-            text(renderer, 20, 268, "TICK", muted);
-            text(renderer, 20, 283, number(state.tick));
+            if (help) {
+                text(renderer, 20, 225, "SEED", muted);
+                text(renderer, 20, 240, playback ? "RECORDED" : number(seed));
+                text(renderer, 20, 268, "TICK", muted);
+                text(renderer, 20, 283, number(state.tick));
+            }
             text(renderer, 320, 66, "NEXT", mint);
             if (mode) {
                 for (int i = 0; i < 5; ++i) {
@@ -2121,7 +2322,7 @@ int main(int argc, char** argv) {
                              menu[static_cast<std::size_t>(i)],
                          selection == i ? mint : ink);
                 }
-            } else {
+            } else if (help) {
                 text(renderer, 414, 66, mode_name(), mint);
                 text(renderer, 414, 87, "CONTROLS", mint);
                 unsigned control_row = 0;
@@ -2161,7 +2362,7 @@ int main(int argc, char** argv) {
                         text(renderer, 320, 329, "F7-9 SPIN F10 GARB F11 VIEW", muted);
                 }
             }
-            if (practice && !mode) {
+            if (help && practice && !mode) {
                 int row = 0;
                 for (const auto& item : timeline)
                     text(renderer, 320, 310.F + static_cast<float>(row++) * 9.F, item, muted);
@@ -2171,12 +2372,17 @@ int main(int argc, char** argv) {
         std::string status = notice;
         if (status.size() > 60)
             status.resize(60);
-        text(renderer, 8, 349, status, behind ? SDL_Color{255, 154, 93, 255} : mint);
         text(renderer,
-             500,
+             8,
              349,
-             behind ? "OVERLOAD " + number(overload) : "PADS " + number(pads.size()),
-             muted);
+             help ? status : "ESC / START: PAUSE",
+             behind ? SDL_Color{255, 154, 93, 255} : mint);
+        if (help)
+            text(renderer,
+                 500,
+                 349,
+                 behind ? "OVERLOAD " + number(overload) : "PADS " + number(pads.size()),
+                 muted);
         if (!capture_path.empty() &&
             (!running || (smoke_frames > 0 && frames + 1 >= smoke_frames))) {
             SDL_Surface* capture_surface = SDL_RenderReadPixels(renderer, nullptr);

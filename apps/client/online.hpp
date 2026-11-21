@@ -4,6 +4,49 @@
 #include <stackpulse/network.hpp>
 
 namespace stackpulse::client {
+enum class PlayerStatus { playing, out, disconnected };
+struct LeaderboardEntry {
+    std::uint16_t id{};
+    std::uint64_t score{};
+    std::string name;
+    PlayerStatus status{};
+};
+inline std::vector<LeaderboardEntry> leaderboard(const net::View& view) {
+    std::vector<LeaderboardEntry> rows;
+    for (const auto& player : view.authoritative.players) {
+        auto member = std::find_if(view.members.begin(), view.members.end(), [&](const auto& m) {
+            return m.player == player.id && m.role == net::Role::player;
+        });
+        const bool disconnected =
+            player.disconnected || (member != view.members.end() && !member->connected);
+        rows.push_back(
+            {player.id,
+             player.board.score,
+             member == view.members.end() ? "P" + std::to_string(player.id) : member->name,
+             disconnected             ? PlayerStatus::disconnected
+             : player.board.game_over ? PlayerStatus::out
+                                      : PlayerStatus::playing});
+    }
+    std::sort(rows.begin(), rows.end(), [](const auto& a, const auto& b) {
+        return a.score != b.score ? a.score > b.score : a.id < b.id;
+    });
+    return rows;
+}
+struct RoomSelection {
+    std::string code;
+    net::Role role{net::Role::player};
+    bool password_required{};
+    void choose(const net::RoomInfo& room, net::Role requested_role) {
+        code = room.code;
+        role = requested_role;
+        password_required = room.password_required;
+    }
+    // Player selection keeps its explicit role even for a full or running room;
+    // the server returns the operation error rather than silently watching.
+    void confirm(net::Client& client, const std::string& password) const {
+        client.join_room(code, password, role);
+    }
+};
 // Only the local board is speculative. The full match remains immutable authority.
 class OnlinePrediction {
   public:
@@ -16,11 +59,14 @@ class OnlinePrediction {
             reset();
             return false;
         }
-        if (view.room_id != room_id_ || view.match_id != match_id_ || view.player != player_) {
+        if (view.room_id != room_id_ || view.match_id != match_id_ || view.player != player_ ||
+            view.room.preset != preset_ || view.room.start_level != start_level_) {
             reset();
             room_id_ = view.room_id;
             match_id_ = view.match_id;
             player_ = view.player;
+            preset_ = view.room.preset;
+            start_level_ = view.room.start_level;
         }
         if (!view.has_snapshot || view.snapshot_revision <= revision_)
             return false;
@@ -107,6 +153,8 @@ class OnlinePrediction {
   private:
     std::uint64_t room_id_{}, match_id_{};
     std::uint16_t player_{};
+    modern::Preset preset_{};
+    std::uint8_t start_level_{};
     modern::State board_;
     std::deque<net::Input> history_;
     std::uint64_t revision_{}, authoritative_tick_{}, sounded_through_{}, hard_resets_{},

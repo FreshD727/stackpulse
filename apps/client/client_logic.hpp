@@ -124,7 +124,8 @@ constexpr std::uint32_t modern_input(const input::TickInput& sample, modern::Pre
     for (const auto& [action, bit] : mapping)
         if (sample.held[static_cast<std::size_t>(action)])
             mask |= bit;
-    if (sample.held[static_cast<std::size_t>(input::Action::hold)])
+    if (preset != modern::Preset::classic &&
+        sample.held[static_cast<std::size_t>(input::Action::hold)])
         mask |= modern::hold;
     if (preset == modern::Preset::modern &&
         sample.held[static_cast<std::size_t>(input::Action::drop)])

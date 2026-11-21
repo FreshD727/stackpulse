@@ -126,3 +126,53 @@ TEST_CASE("Spectator views discard local prediction and cannot sample or upload 
     REQUIRE_FALSE(p.sample(stackpulse::modern::down, events));
     REQUIRE(p.rolling().empty());
 }
+
+TEST_CASE("Leaderboard ranks score then id and distinguishes out from disconnected",
+          "[online][ui]") {
+    auto view = snapshot();
+    view.authoritative.players[0].board.score = 90;
+    view.authoritative.players[1].board.score = 120;
+    view.authoritative.players[0].board.game_over = true;
+    view.authoritative.players[1].board.game_over = true;
+    view.authoritative.players[1].disconnected = true;
+    auto rows = stackpulse::client::leaderboard(view);
+    REQUIRE(rows[0].id == 2);
+    REQUIRE(rows[0].status == stackpulse::client::PlayerStatus::disconnected);
+    REQUIRE(rows[1].status == stackpulse::client::PlayerStatus::out);
+    view.authoritative.players[0].board.score = 120;
+    rows = stackpulse::client::leaderboard(view);
+    REQUIRE(rows[0].id == 1);
+    REQUIRE(rows[1].id == 2);
+}
+TEST_CASE("Room selection preserves explicit player or watch action across room states",
+          "[online][ui]") {
+    stackpulse::net::RoomInfo room;
+    room.code = "ABCD";
+    room.state = stackpulse::net::Phase::playing;
+    room.players = room.capacity = 8;
+    room.password_required = true;
+    stackpulse::client::RoomSelection selected;
+    selected.choose(room, stackpulse::net::Role::player);
+    REQUIRE(selected.role == stackpulse::net::Role::player);
+    REQUIRE(selected.password_required);
+    REQUIRE(selected.code == room.code);
+    selected.choose(room, stackpulse::net::Role::spectator);
+    REQUIRE(selected.role == stackpulse::net::Role::spectator);
+    room.password_required = false;
+    selected.choose(room, stackpulse::net::Role::player);
+    REQUIRE_FALSE(selected.password_required);
+    REQUIRE(selected.role == stackpulse::net::Role::player);
+}
+
+TEST_CASE("Online prediction starts a new input epoch when lobby rules change", "[online][ui]") {
+    auto view = snapshot();
+    stackpulse::client::OnlinePrediction prediction;
+    REQUIRE(prediction.apply(view));
+    stackpulse::modern::Events events;
+    REQUIRE(prediction.sample(stackpulse::modern::left, events));
+    REQUIRE_FALSE(prediction.rolling().empty());
+    view.room.start_level = 4;
+    REQUIRE(prediction.apply(view));
+    REQUIRE(prediction.rolling().empty());
+    REQUIRE(prediction.board() == view.authoritative.players[0].board);
+}

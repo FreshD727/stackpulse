@@ -130,10 +130,12 @@ TEST_CASE("Modern input translates platform drop before hold without swapping bi
     sample.held[static_cast<std::size_t>(in::Action::drop)] = true;
     REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hard_drop);
     REQUIRE(client::modern_input(sample, modern::Preset::fusion) == 0);
+    REQUIRE(client::modern_input(sample, modern::Preset::classic) == 0);
     sample.held[static_cast<std::size_t>(in::Action::drop)] = false;
     sample.held[static_cast<std::size_t>(in::Action::hold)] = true;
     REQUIRE(client::modern_input(sample, modern::Preset::modern) == modern::hold);
     REQUIRE(client::modern_input(sample, modern::Preset::fusion) == modern::hold);
+    REQUIRE(client::modern_input(sample, modern::Preset::classic) == 0);
     sample.held[static_cast<std::size_t>(in::Action::left)] = true;
     sample.held[static_cast<std::size_t>(in::Action::clockwise)] = true;
     sample.held[static_cast<std::size_t>(in::Action::pause)] = true;
