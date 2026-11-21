@@ -29,6 +29,7 @@ struct Client::Impl {
     ENetHost* socket{};
     ENetPeer* peer{};
     View view;
+    ConnectOptions options;
     std::string hostname;
     std::uint16_t port{};
     modern::Preset preset{};
@@ -114,7 +115,9 @@ struct Client::Impl {
         if (p.tag == Tag::welcome) {
             const auto id = r.get(2), match = r.get(8);
             auto token = r.data(32);
-            if (!r.done() || !p.session || id > 2 || !match || (session && p.session != session)) {
+            const auto room_id = r.get(8), role = r.get(1);
+            if (!r.done() || !p.session || id > 65535 || role > 1 || !match ||
+                (session && p.session != session)) {
                 fail("Invalid welcome");
                 return;
             }
@@ -127,11 +130,20 @@ struct Client::Impl {
                 send(peer, {Tag::reconnect, session, std::move(w.bytes)});
                 return;
             }
-            if (!id) {
-                fail("Missing player identity");
-                return;
+            if (view.match_id != match || view.room_id != room_id) {
+                view.has_snapshot = false;
+                view.authoritative = {};
+                view.server_tick = view.accepted_through = 0;
+                assembly.reset();
+                result_seen = false;
+                view.members.clear();
+                view.room_code.clear();
             }
-            view.player = static_cast<std::uint16_t>(id);
+            view.room_id = room_id;
+            view.match_id = match;
+            view.member_id = static_cast<std::uint16_t>(id);
+            view.role = static_cast<Role>(role);
+            view.player = view.role == Role::player ? static_cast<std::uint16_t>(id) : 0;
             old_player = view.player;
             match_id = match;
             std::copy(token.begin(), token.end(), credential.begin());
@@ -144,17 +156,54 @@ struct Client::Impl {
         if (!session || p.session != session || !view.connected)
             return;
         if (p.tag == Tag::lobby) {
-            const auto phase = r.get(1), countdown = r.get(4), tick = r.get(8), ready = r.get(1),
-                       opponent = r.get(1);
-            if (!r.done() || phase > static_cast<unsigned>(Phase::results) || ready > 1 ||
-                opponent > 1 || countdown > 180) {
+            const auto phase = r.get(1), countdown = r.get(4), tick = r.get(8), room = r.get(8),
+                       match = r.get(8), manager = r.get(2), players = r.get(1),
+                       spectators = r.get(1), len = r.get(1);
+            auto code = r.data(len);
+            auto count = r.get(1);
+            std::vector<Member> members;
+            bool valid = phase >= static_cast<unsigned>(Phase::waiting) &&
+                         phase <= static_cast<unsigned>(Phase::results) && countdown <= 180 &&
+                         room == view.room_id && match == match_id && players >= 2 &&
+                         players <= 8 && spectators <= 16 && len <= 16 && count <= 24;
+            std::uint16_t previous = 0;
+            unsigned player_count = 0, spectator_count = 0;
+            for (std::uint64_t i = 0; i < count && valid; ++i) {
+                const auto id = r.get(2), player = r.get(2), role = r.get(1), ready = r.get(1),
+                           connected = r.get(1), n = r.get(1);
+                auto name = r.data(n);
+                valid = id > previous && role <= 1 && ready <= 1 && connected <= 1 && n >= 1 &&
+                        n <= 24 && player == (role == 0 ? id : 0);
+                previous = static_cast<std::uint16_t>(id);
+                if (role == 0)
+                    ++player_count;
+                else
+                    ++spectator_count;
+                members.push_back({static_cast<std::uint16_t>(id),
+                                   static_cast<std::uint16_t>(player),
+                                   std::string(name.begin(), name.end()),
+                                   static_cast<Role>(role),
+                                   ready != 0,
+                                   connected != 0});
+            }
+            if (!valid || !r.done() || player_count > players || spectator_count > spectators) {
                 fail("Invalid lobby");
                 return;
             }
             view.countdown = static_cast<std::uint32_t>(countdown);
             view.server_tick = std::max(view.server_tick, tick);
-            view.ready = ready != 0;
-            view.opponent_ready = opponent != 0;
+            view.manager_id = static_cast<std::uint16_t>(manager);
+            view.player_limit = static_cast<std::uint8_t>(players);
+            view.spectator_limit = static_cast<std::uint8_t>(spectators);
+            view.room_code.assign(code.begin(), code.end());
+            view.members = std::move(members);
+            view.ready = false;
+            view.opponent_ready = false;
+            for (auto& m : view.members)
+                if (m.id == view.member_id)
+                    view.ready = m.ready;
+                else if (m.role == Role::player)
+                    view.opponent_ready |= m.ready;
             if (phase != static_cast<unsigned>(Phase::results) || result_seen)
                 view.phase = static_cast<Phase>(phase);
         } else if (p.tag == Tag::chunk) {
@@ -175,7 +224,7 @@ struct Client::Impl {
             match::State state;
             if (!full.done() || match != match_id || version != modern::rules_version ||
                 rules != static_cast<unsigned>(preset) || !match::decode_state(bytes, state) ||
-                state.players.size() != 2 || state.players[0].id != 1 || state.players[1].id != 2 ||
+                state.players.size() < 2 || state.players.size() > 8 ||
                 match::state_hash(state) != hash ||
                 std::any_of(state.players.begin(), state.players.end(), [&](const auto& b) {
                     return b.board.preset != preset;
@@ -222,6 +271,14 @@ struct Client::Impl {
                 w.put(modern::rules_version, 4);
                 w.put(static_cast<unsigned>(preset), 1);
                 w.put(recovering, 1);
+                w.put(static_cast<unsigned>(options.role), 1);
+                w.put(options.create_room, 1);
+                w.put(options.name.size(), 1);
+                w.data({reinterpret_cast<const std::uint8_t*>(options.name.data()),
+                        options.name.size()});
+                w.put(options.room_code.size(), 1);
+                w.data({reinterpret_cast<const std::uint8_t*>(options.room_code.data()),
+                        options.room_code.size()});
                 send(peer, {Tag::hello, 0, std::move(w.bytes)});
             } else if (event.type == ENET_EVENT_TYPE_RECEIVE) {
                 if (view.phase != Phase::error)
@@ -245,12 +302,55 @@ struct Client::Impl {
 };
 Client::Client() : impl_(std::make_unique<Impl>()) {}
 Client::~Client() = default;
-bool Client::connect(const std::string& host, std::uint16_t port, modern::Preset preset) {
+bool Client::connect(const ConnectOptions& options) {
+    if (options.name.empty() || options.name.size() > 24 || options.room_code.size() > 16 ||
+        static_cast<unsigned>(options.role) > 1 ||
+        std::any_of(options.name.begin(), options.name.end(), [](unsigned char x) {
+            return x < 32 || x > 126;
+        })) {
+        impl_->fail("Invalid connection options");
+        return false;
+    }
+    impl_->options = options;
+    const auto& host = options.host;
+    const auto port = options.port;
+    const auto preset = options.preset;
     impl_->view = View{};
     impl_->credential = {};
     impl_->match_id = 0;
     impl_->old_player = 0;
     return impl_->open(host, port, preset, false);
+}
+bool Client::connect(const std::string& host, std::uint16_t port, modern::Preset preset) {
+    ConnectOptions options;
+    options.host = host;
+    options.port = port;
+    options.preset = preset;
+    return connect(options);
+}
+void Client::create_room() {
+    if (impl_->view.connected)
+        send(impl_->peer, {Tag::create_room, impl_->session, {}});
+}
+void Client::join_room(const std::string& code, Role role) {
+    if (!impl_->view.connected || code.size() > 16 || static_cast<unsigned>(role) > 1)
+        return;
+    Writer w;
+    w.put(static_cast<unsigned>(role), 1);
+    w.put(code.size(), 1);
+    w.data({reinterpret_cast<const std::uint8_t*>(code.data()), code.size()});
+    send(impl_->peer, {Tag::join_room, impl_->session, std::move(w.bytes)});
+}
+void Client::leave_room() {
+    if (impl_->view.connected)
+        send(impl_->peer, {Tag::leave_room, impl_->session, {}});
+}
+void Client::return_to_lobby() {
+    if (impl_->view.connected)
+        send(impl_->peer, {Tag::return_lobby, impl_->session, {}});
+}
+void Client::set_featured(std::uint16_t id) {
+    impl_->view.featured_player = id;
 }
 void Client::poll() {
     impl_->poll();
@@ -265,8 +365,8 @@ void Client::set_ready(bool ready) {
         enet_host_flush(impl_->socket);
 }
 void Client::submit(const std::vector<Input>& frames) {
-    if (!impl_->view.connected || impl_->view.phase != Phase::playing || frames.empty() ||
-        frames.size() > 8)
+    if (!impl_->view.connected || impl_->view.role != Role::player || !impl_->view.player ||
+        impl_->view.phase != Phase::playing || frames.empty() || frames.size() > 8)
         return;
     Writer w;
     w.put(impl_->match_id, 8);

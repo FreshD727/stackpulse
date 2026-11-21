@@ -90,3 +90,39 @@ TEST_CASE("Invalid online authority does not mutate prediction", "[online]") {
     REQUIRE_FALSE(p.apply(v));
     REQUIRE(p.board() == before);
 }
+
+TEST_CASE("A new room or match epoch resets speculative input and permits tick zero", "[online]") {
+    auto v = snapshot();
+    v.room_id = 3;
+    v.match_id = 4;
+    stackpulse::client::OnlinePrediction p;
+    REQUIRE(p.apply(v));
+    stackpulse::modern::Events events;
+    REQUIRE(p.sample(stackpulse::modern::right, events));
+    REQUIRE(p.history_size() == 1);
+    ++v.match_id;
+    ++v.snapshot_revision;
+    REQUIRE(p.apply(v));
+    REQUIRE(p.history_size() == 0);
+    REQUIRE(p.board() == v.authoritative.players.front().board);
+    REQUIRE(p.sample(stackpulse::modern::right, events));
+    REQUIRE(events.shifted);
+    ++v.room_id;
+    ++v.snapshot_revision;
+    REQUIRE(p.apply(v));
+    REQUIRE(p.history_size() == 0);
+}
+
+TEST_CASE("Spectator views discard local prediction and cannot sample or upload frames",
+          "[online]") {
+    auto v = snapshot();
+    stackpulse::client::OnlinePrediction p;
+    REQUIRE(p.apply(v));
+    stackpulse::modern::Events events;
+    REQUIRE(p.sample(stackpulse::modern::down, events));
+    v.role = stackpulse::net::Role::spectator;
+    REQUIRE_FALSE(p.apply(v));
+    REQUIRE_FALSE(p.initialized());
+    REQUIRE_FALSE(p.sample(stackpulse::modern::down, events));
+    REQUIRE(p.rolling().empty());
+}

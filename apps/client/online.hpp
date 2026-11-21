@@ -8,7 +8,20 @@ namespace stackpulse::client {
 class OnlinePrediction {
   public:
     static constexpr std::size_t history_limit = 240;
+    void reset() {
+        *this = OnlinePrediction{};
+    }
     bool apply(const net::View& view) {
+        if (view.role == net::Role::spectator) {
+            reset();
+            return false;
+        }
+        if (view.room_id != room_id_ || view.match_id != match_id_ || view.player != player_) {
+            reset();
+            room_id_ = view.room_id;
+            match_id_ = view.match_id;
+            player_ = view.player;
+        }
         if (!view.has_snapshot || view.snapshot_revision <= revision_)
             return false;
         const auto player = std::find_if(view.authoritative.players.begin(),
@@ -92,6 +105,8 @@ class OnlinePrediction {
     }
 
   private:
+    std::uint64_t room_id_{}, match_id_{};
+    std::uint16_t player_{};
     modern::State board_;
     std::deque<net::Input> history_;
     std::uint64_t revision_{}, authoritative_tick_{}, sounded_through_{}, hard_resets_{},

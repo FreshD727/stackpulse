@@ -22,6 +22,7 @@ CASES = {
     "jitter_reorder": (35, 30, 0, 0),
     "loss_duplicate": (20, 15, 0.05, 0.10),
     "combined": (50, 45, 0.08, 0.08),
+    "high_latency": (75, 20, 0.01, 0),
 }
 
 

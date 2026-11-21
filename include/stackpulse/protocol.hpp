@@ -6,7 +6,7 @@
 
 namespace stackpulse::net::wire {
 bool initialize();
-constexpr std::size_t max_packet = 1200, max_object = 256 * 1024, chunk_size = 1120;
+constexpr std::size_t max_packet = 1200, max_object = 1024 * 1024, chunk_size = 1120;
 enum class Tag : std::uint8_t {
     hello = 1,
     welcome,
@@ -17,7 +17,12 @@ enum class Tag : std::uint8_t {
     snapshot_ack,
     reconnect,
     reject,
-    result
+    result,
+    create_room,
+    join_room,
+    leave_room,
+    return_lobby,
+    featured
 };
 struct Packet {
     Tag tag{};

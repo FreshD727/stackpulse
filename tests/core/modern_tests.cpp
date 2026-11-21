@@ -513,7 +513,7 @@ TEST_CASE("One hundred seeds resume identical modern and Fusion traces") {
             const std::uint32_t held = t % 31 == 0   ? clockwise
                                        : t % 7 == 0  ? down
                                        : t % 43 == 0 ? left
-                                                     : 0;
+                                                     : Action{};
             REQUIRE(step(a, held));
             REQUIRE(step(b, held));
         }
@@ -827,7 +827,7 @@ TEST_CASE("Fusion ignores hard drop through presses holds and release") {
     auto a = initial_state(1, Preset::fusion), b = a;
     for (unsigned tick = 0; tick < 100; ++tick) {
         Events e;
-        REQUIRE(step(a, tick % 3 ? hard_drop : 0u, &e));
+        REQUIRE(step(a, tick % 3 ? hard_drop : Action{}, &e));
         REQUIRE(step(b, 0));
         REQUIRE_FALSE(e.hard_dropped);
         auto compare = a;

@@ -13,6 +13,9 @@ struct Slot {
     std::array<std::uint8_t, 32> credential{};
     Admission input;
     bool occupied{}, ready{};
+    std::uint16_t id{};
+    Role role{Role::player};
+    std::string name;
 };
 struct Connection {
     std::uint64_t session{}, opened{}, window{};
@@ -20,6 +23,9 @@ struct Connection {
     std::uint64_t sent_at{};
     std::uint16_t player{};
     bool hello{}, recovering{}, result_sent{}, closing{};
+    std::uint64_t room{};
+    std::string name{"Player"};
+    Role role{Role::player};
 };
 void send(ENetPeer* peer, const Packet& p, enet_uint8 channel = 0, bool reliable = true) {
     auto bytes = encode(p);
@@ -34,167 +40,266 @@ void send(ENetPeer* peer, const Packet& p, enet_uint8 channel = 0, bool reliable
 }
 } // namespace
 struct Server::Impl {
+    struct Room {
+        View view;
+        std::map<std::uint16_t, Slot> slots;
+        std::uint16_t next_member{1};
+    };
     ServerOptions options;
     ENetHost* host{};
     View view;
     std::string failure;
-    std::uint64_t room_tick{}, match_id{};
-    std::array<Slot, 2> slots;
+    std::uint64_t room_tick{}, default_room{};
+    ServerMetrics metrics;
+    enet_uint32 previous_sent{}, previous_received{};
+    std::map<std::uint64_t, Room> rooms;
     std::map<ENetPeer*, Connection> connections;
     explicit Impl(const ServerOptions& o) : options(o) {
         view.phase = Phase::waiting;
-        if (options.initial_state) {
-            const auto& fixture = *options.initial_state;
-            if (!match::valid_state(fixture) || fixture.tick ||
-                fixture.result != match::Result::playing || fixture.players.size() != 2 ||
-                fixture.players[0].id != 1 || fixture.players[1].id != 2 ||
-                std::any_of(fixture.players.begin(), fixture.players.end(), [&](const auto& p) {
-                    return p.board.preset != options.preset || p.disconnected;
-                })) {
-                failure = "Invalid constructor duel fixture";
-                return;
-            }
+        if (o.players < 2 || o.players > 8 || o.spectators > 16 || !o.rooms || o.rooms > 8) {
+            failure = "Invalid room capacity";
+            return;
+        }
+        if (o.initial_state &&
+            (!match::valid_state(*o.initial_state) || o.initial_state->tick ||
+             o.initial_state->result != match::Result::playing ||
+             o.initial_state->players.size() != 2 || o.initial_state->players[0].id != 1 ||
+             o.initial_state->players[1].id != 2 ||
+             std::any_of(o.initial_state->players.begin(),
+                         o.initial_state->players.end(),
+                         [&](auto& p) { return p.board.preset != o.preset || p.disconnected; }))) {
+            failure = "Invalid constructor duel fixture";
+            return;
         }
         if (!initialize()) {
             failure = "ENet initialization failed";
             return;
         }
-        match_id = random_id();
-        if (!match_id) {
-            failure = "Secure random source unavailable";
-            return;
-        }
         ENetAddress address{};
-        address.port = options.port;
-        if (enet_address_set_host_ip(&address, options.bind.c_str()) != 0) {
+        address.port = o.port;
+        if (enet_address_set_host_ip(&address, o.bind.c_str())) {
             failure = "Invalid bind address";
             return;
         }
-        host = enet_host_create(&address, 8, 2, 0, 0);
+        host = enet_host_create(
+            &address, static_cast<std::size_t>(o.rooms) * (o.players + o.spectators) + 16, 2, 0, 0);
         if (!host)
-            failure = "Cannot bind UDP duel server";
+            failure = "Cannot bind UDP room server";
+        else {
+            auto* r = make_room();
+            if (!r)
+                failure = "Secure random source unavailable";
+            else
+                default_room = r->view.room_id;
+        }
     }
     ~Impl() {
         if (host)
             enet_host_destroy(host);
     }
-    void reject(ENetPeer* peer, const char* detail) {
-        Writer w;
-        for (const char* p = detail; *p && w.bytes.size() < 128; ++p)
-            w.put(static_cast<unsigned char>(*p), 1);
-        auto it = connections.find(peer);
-        send(peer,
-             {Tag::reject, it == connections.end() ? 0 : it->second.session, std::move(w.bytes)});
-        enet_peer_disconnect_later(peer, 1);
-        if (it != connections.end()) {
-            auto& c = it->second;
-            c.closing = true;
-            if (c.player) {
-                const auto id = c.player;
-                auto& slot = slots[id - 1];
-                if (slot.peer == peer) {
-                    slot.peer = nullptr;
-                    slot.ready = false;
-                    slot.input.clear();
-                    if (view.phase == Phase::playing)
-                        match::disconnect(view.authoritative, id);
-                    else if (view.phase == Phase::waiting || view.phase == Phase::countdown) {
-                        slot.occupied = false;
-                        slot.credential = {};
-                        view.phase = Phase::waiting;
-                        view.countdown = 0;
-                    }
+    Room* make_room() {
+        if (rooms.size() >= options.rooms)
+            return nullptr;
+        const auto id = random_id();
+        if (!id || rooms.contains(id))
+            return nullptr;
+        Room r;
+        r.view.phase = Phase::waiting;
+        r.view.room_id = id;
+        r.view.match_id = random_id();
+        r.view.player_limit = options.players;
+        r.view.spectator_limit = options.spectators;
+        static constexpr char hex[] = "0123456789ABCDEF";
+        for (unsigned i = 0; i < 16; ++i)
+            r.view.room_code += hex[(id >> (i * 4)) & 15];
+        return &rooms.emplace(id, std::move(r)).first->second;
+    }
+    Room* room(Connection& c) {
+        auto i = rooms.find(c.room);
+        return i == rooms.end() ? nullptr : &i->second;
+    }
+    void refresh(Room& r) {
+        r.view.members.clear();
+        r.view.manager_id = 0;
+        for (auto& [id, s] : r.slots) {
+            r.view.members.push_back({id,
+                                      s.role == Role::player ? id : std::uint16_t{},
+                                      s.name,
+                                      s.role,
+                                      s.ready,
+                                      s.peer != nullptr});
+            if (s.peer && !r.view.manager_id)
+                r.view.manager_id = id;
+        }
+    }
+    void lobby(Room& r) {
+        refresh(r);
+        for (auto& [peer, c] : connections)
+            if (c.hello && !c.closing && c.room == r.view.room_id && c.player) {
+                Writer w;
+                auto& v = r.view;
+                w.put(static_cast<unsigned>(v.phase), 1);
+                w.put(v.countdown, 4);
+                w.put(v.has_snapshot ? v.authoritative.tick : 0, 8);
+                w.put(v.room_id, 8);
+                w.put(v.match_id, 8);
+                w.put(v.manager_id, 2);
+                w.put(options.players, 1);
+                w.put(options.spectators, 1);
+                w.put(v.room_code.size(), 1);
+                w.data({reinterpret_cast<const std::uint8_t*>(v.room_code.data()),
+                        v.room_code.size()});
+                w.put(v.members.size(), 1);
+                for (auto& m : v.members) {
+                    w.put(m.id, 2);
+                    w.put(m.player, 2);
+                    w.put(static_cast<unsigned>(m.role), 1);
+                    w.put(m.ready, 1);
+                    w.put(m.connected, 1);
+                    w.put(m.name.size(), 1);
+                    w.data({reinterpret_cast<const std::uint8_t*>(m.name.data()), m.name.size()});
                 }
-                c.player = 0;
-                lobby();
+                send(peer, {Tag::lobby, c.session, std::move(w.bytes)});
+            }
+    }
+    void detach(ENetPeer* peer, Connection& c, bool explicit_leave = false) {
+        auto* r = room(c);
+        if (!r || !c.player) {
+            c.room = 0;
+            c.player = 0;
+            return;
+        }
+        auto i = r->slots.find(c.player);
+        if (i != r->slots.end() && i->second.peer == peer) {
+            auto& s = i->second;
+            const bool was_player = s.role == Role::player;
+            s.peer = nullptr;
+            s.ready = false;
+            s.input.clear();
+            if (r->view.phase == Phase::playing && s.role == Role::player) {
+                match::disconnect(r->view.authoritative, s.id);
+                if (explicit_leave) {
+                    s.credential = {};
+                    s.occupied = false;
+                }
+            } else
+                r->slots.erase(i);
+            if (was_player && r->view.phase == Phase::countdown) {
+                r->view.phase = Phase::waiting;
+                r->view.countdown = 0;
+                for (auto& [id, s2] : r->slots)
+                    s2.ready = false;
             }
         }
+        c.room = 0;
+        c.player = 0;
+        c.snapshot = 0;
+        c.result_sent = false;
+        lobby(*r);
     }
-    void welcome(ENetPeer* peer, Connection& c) {
-        Writer w;
-        w.put(c.player, 2);
-        w.put(match_id, 8);
-        std::array<std::uint8_t, 32> empty{};
-        w.data(c.player ? slots[c.player - 1].credential : empty);
-        send(peer, {Tag::welcome, c.session, std::move(w.bytes)});
-    }
-    void lobby() {
-        for (auto& [peer, c] : connections) {
-            if (!c.hello || !c.player)
-                continue;
-            Writer w;
-            w.put(static_cast<unsigned>(view.phase), 1);
-            w.put(view.countdown, 4);
-            w.put(view.has_snapshot ? view.authoritative.tick : 0, 8);
-            w.put(slots[c.player - 1].ready, 1);
-            w.put(slots[2 - c.player].ready, 1);
-            send(peer, {Tag::lobby, c.session, std::move(w.bytes)});
+    void reject(ENetPeer* peer, const char* detail) {
+        auto i = connections.find(peer);
+        send(peer,
+             {Tag::reject,
+              i == connections.end() ? 0 : i->second.session,
+              std::vector<std::uint8_t>(
+                  detail,
+                  detail + std::min<std::size_t>(128, std::char_traits<char>::length(detail)))});
+        if (i != connections.end()) {
+            detach(peer, i->second);
+            i->second.closing = true;
         }
+        enet_peer_disconnect_later(peer, 1);
     }
     void drop(ENetPeer* peer) {
-        auto it = connections.find(peer);
-        if (it == connections.end())
+        auto i = connections.find(peer);
+        if (i == connections.end())
             return;
-        auto id = it->second.player;
-        if (id && slots[id - 1].peer == peer) {
-            auto& slot = slots[id - 1];
-            slot.peer = nullptr;
-            slot.ready = false;
-            slot.input.clear();
-            if (view.phase == Phase::playing)
-                match::disconnect(view.authoritative, id);
-            else if (view.phase == Phase::waiting || view.phase == Phase::countdown) {
-                slot.occupied = false;
-                slot.credential = {};
-                view.phase = Phase::waiting;
-                view.countdown = 0;
-            }
+        detach(peer, i->second);
+        connections.erase(i);
+    }
+    void welcome(ENetPeer* peer, Connection& c) {
+        auto* r = room(c);
+        Writer w;
+        w.put(c.player, 2);
+        w.put(r ? r->view.match_id : 1, 8);
+        std::array<std::uint8_t, 32> empty{};
+        w.data(r && c.player ? r->slots.at(c.player).credential : empty);
+        w.put(c.room, 8);
+        w.put(static_cast<unsigned>(c.role), 1);
+        send(peer, {Tag::welcome, c.session, std::move(w.bytes)});
+    }
+    bool join(ENetPeer* peer, Connection& c, Room& r, Role requested) {
+        Role role = r.view.phase == Phase::waiting ? requested : Role::spectator;
+        unsigned n = 0;
+        for (auto& [id, s] : r.slots)
+            if (s.role == role)
+                ++n;
+        if (n >= (role == Role::player ? options.players : options.spectators) || !r.next_member) {
+            reject(peer, "Room full");
+            return false;
         }
-        connections.erase(it);
-        lobby();
+        Slot s;
+        s.id = r.next_member++;
+        s.role = role;
+        s.name = c.name;
+        s.peer = peer;
+        s.occupied = true;
+        if (!random_bytes(s.credential)) {
+            reject(peer, "Secure random unavailable");
+            return false;
+        }
+        detach(peer, c, true);
+        c.room = r.view.room_id;
+        c.player = s.id;
+        c.role = role;
+        c.snapshot = 0;
+        c.result_sent = false;
+        r.slots.emplace(s.id, std::move(s));
+        welcome(peer, c);
+        lobby(r);
+        return true;
     }
     void snapshot(ENetPeer* peer, Connection& c) {
-        if (!c.player || !view.has_snapshot || c.snapshot ||
-            (view.phase == Phase::results && c.result_sent))
+        auto* r = room(c);
+        if (!r || !c.player || !r->view.has_snapshot || c.snapshot ||
+            (r->view.phase == Phase::results && c.result_sent))
             return;
         Writer w;
-        w.put(match_id, 8);
+        w.put(r->view.match_id, 8);
         w.put(modern::rules_version, 4);
         w.put(static_cast<unsigned>(options.preset), 1);
-        w.put(match::state_hash(view.authoritative), 8);
-        w.data(match::canonical_bytes(view.authoritative));
+        w.put(match::state_hash(r->view.authoritative), 8);
+        w.data(match::canonical_bytes(r->view.authoritative));
         auto id = c.next_transfer++;
         if (!id)
             id = c.next_transfer++;
         auto parts = chunks(c.session, id, w.bytes);
         if (parts.empty()) {
-            reject(peer, "Snapshot exceeds supported duel bound");
+            reject(peer, "Snapshot exceeds room bound");
             return;
         }
         for (auto& p : parts)
             send(peer, p);
         c.snapshot = id;
         c.sent_at = room_tick;
-        if (view.phase == Phase::results) {
+        if (r->view.phase == Phase::results) {
             Writer result;
-            result.put(match_id, 8);
-            result.put(view.authoritative.tick, 8);
-            result.put(match::state_hash(view.authoritative), 8);
+            result.put(r->view.match_id, 8);
+            result.put(r->view.authoritative.tick, 8);
+            result.put(match::state_hash(r->view.authoritative), 8);
             send(peer, {Tag::result, c.session, std::move(result.bytes)});
             c.result_sent = true;
         }
     }
     void receive(ENetPeer* peer, const ENetPacket* data, enet_uint8 channel) {
         auto it = connections.find(peer);
-        if (it == connections.end())
+        if (it == connections.end() || it->second.closing)
             return;
         auto& c = it->second;
-        if (c.closing)
-            return;
         if (room_tick - c.window >= 60) {
             c.window = room_tick;
-            c.inputs = c.controls = c.bytes = 0;
-            c.violations = 0;
+            c.inputs = c.controls = c.bytes = c.violations = 0;
         }
         c.bytes += static_cast<std::uint32_t>(data->dataLength);
         Packet p;
@@ -206,19 +311,36 @@ struct Server::Impl {
             reject(peer, "Wrong channel");
             return;
         }
-        const bool quota =
-            c.bytes > 256 * 1024 || (p.tag == Tag::input ? ++c.inputs > 120 : ++c.controls > 80);
-        if (quota) {
+        if (c.bytes > 256 * 1024 || (p.tag == Tag::input ? ++c.inputs > 120 : ++c.controls > 80)) {
             if (++c.violations >= 3) {
                 enet_peer_disconnect_now(peer, 2);
                 drop(peer);
             }
             return;
         }
-        Reader r{p.body};
+        Reader rd{p.body};
         if (p.tag == Tag::hello) {
-            auto version = r.get(4), preset = r.get(1), recovery = r.get(1);
-            if (c.hello || p.session || !r.done() || version != modern::rules_version ||
+            auto version = rd.get(4), preset = rd.get(1), recovery = rd.get(1);
+            Role role = Role::player;
+            bool create = false;
+            std::string code;
+            if (rd.offset < rd.bytes.size()) {
+                auto v = rd.get(1), cr = rd.get(1), n = rd.get(1);
+                auto name = rd.data(n);
+                auto len = rd.get(1);
+                auto b = rd.data(len);
+                if (v > 1 || cr > 1 || !n || n > 24 || len > 16 ||
+                    std::any_of(
+                        name.begin(), name.end(), [](auto x) { return x < 32 || x > 126; })) {
+                    reject(peer, "Invalid room handshake");
+                    return;
+                }
+                role = static_cast<Role>(v);
+                create = cr != 0;
+                c.name.assign(name.begin(), name.end());
+                code.assign(b.begin(), b.end());
+            }
+            if (c.hello || p.session || !rd.done() || version != modern::rules_version ||
                 preset != static_cast<unsigned>(options.preset) || recovery > 1) {
                 reject(peer, "Incompatible rules or handshake");
                 return;
@@ -230,50 +352,53 @@ struct Server::Impl {
             }
             c.hello = true;
             c.recovering = recovery != 0;
-            if (!c.recovering) {
-                if (view.phase != Phase::waiting) {
-                    reject(peer, "Duel already started");
-                    return;
-                }
-                for (std::size_t i = 0; i < slots.size(); ++i)
-                    if (!slots[i].occupied) {
-                        auto& slot = slots[i];
-                        if (!random_bytes(slot.credential)) {
-                            reject(peer, "Secure random unavailable");
-                            return;
-                        }
-                        slot.occupied = true;
-                        slot.peer = peer;
-                        c.player = static_cast<std::uint16_t>(i + 1);
-                        break;
-                    }
-                if (!c.player) {
-                    reject(peer, "Duel full");
-                    return;
-                }
+            if (c.recovering) {
+                welcome(peer, c);
+                return;
             }
-            welcome(peer, c);
-            lobby();
+            Room* target = nullptr;
+            if (create)
+                target = make_room();
+            else if (code.empty())
+                target = &rooms.at(default_room);
+            else
+                for (auto& [id, r] : rooms)
+                    if (r.view.room_code == code)
+                        target = &r;
+            if (!target) {
+                reject(peer, "Room unavailable");
+                return;
+            }
+            join(peer, c, *target, role);
             return;
         }
         if (!c.hello || !p.session || p.session != c.session)
             return;
         if (p.tag == Tag::reconnect) {
-            auto match = r.get(8), id = r.get(2);
-            auto token = r.data(32);
-            if (!r.done() || !c.recovering || c.player || match != match_id || id < 1 || id > 2 ||
-                view.phase != Phase::playing) {
+            auto mid = rd.get(8), id = rd.get(2);
+            auto token = rd.data(32);
+            Room* r = nullptr;
+            for (auto& [rid, r2] : rooms)
+                if (r2.view.match_id == mid)
+                    r = &r2;
+            if (!rd.done() || !c.recovering || c.player || !r || r->view.phase != Phase::playing) {
                 reject(peer, "Reconnect unavailable");
                 return;
             }
-            auto& slot = slots[id - 1];
-            auto& board = view.authoritative.players[id - 1];
-            // Compare every credential byte; credentials never enter snapshots or logs.
-            unsigned difference = 0;
-            for (std::size_t i = 0; i < 32; ++i)
-                difference |= slot.credential[i] ^ token[i];
-            if (!slot.occupied || difference || board.placement ||
-                (board.disconnected && board.deadline <= view.authoritative.tick)) {
+            auto i = r->slots.find(static_cast<std::uint16_t>(id));
+            if (i == r->slots.end() || i->second.role != Role::player) {
+                reject(peer, "Reconnect unavailable");
+                return;
+            }
+            auto& s = i->second;
+            unsigned diff = 0;
+            for (unsigned j = 0; j < 32; ++j)
+                diff |= s.credential[j] ^ token[j];
+            auto b = std::find_if(r->view.authoritative.players.begin(),
+                                  r->view.authoritative.players.end(),
+                                  [&](auto& x) { return x.id == id; });
+            if (!s.occupied || diff || b == r->view.authoritative.players.end() || b->placement ||
+                (b->disconnected && b->deadline <= r->view.authoritative.tick)) {
                 reject(peer, "Reconnect credential expired or invalid");
                 return;
             }
@@ -282,73 +407,148 @@ struct Server::Impl {
                 reject(peer, "Secure random unavailable");
                 return;
             }
-            if (slot.peer && slot.peer != peer) {
-                auto* old_peer = slot.peer;
-                enet_peer_disconnect_now(old_peer, 0);
-                drop(old_peer);
+            if (s.peer && s.peer != peer) {
+                auto* old = s.peer;
+                enet_peer_disconnect_now(old, 0);
+                drop(old);
             }
-            if (!match::reconnect(view.authoritative, static_cast<std::uint16_t>(id))) {
+            if (!match::reconnect(r->view.authoritative, static_cast<std::uint16_t>(id))) {
                 reject(peer, "Reconnect state unavailable");
                 return;
             }
-            slot.credential = replacement;
+            s.credential = replacement;
+            s.peer = peer;
+            s.input.clear();
             c.player = static_cast<std::uint16_t>(id);
+            c.role = Role::player;
+            c.room = r->view.room_id;
             c.recovering = false;
-            slot.peer = peer;
-            slot.input.clear();
             welcome(peer, c);
+            lobby(*r);
             snapshot(peer, c);
-            lobby();
             return;
         }
-        if (!c.player)
+        if (p.tag == Tag::create_room || p.tag == Tag::join_room) {
+            Role role = Role::player;
+            Room* target = nullptr;
+            if (p.tag == Tag::create_room) {
+                if (!rd.done()) {
+                    reject(peer, "Invalid create");
+                    return;
+                }
+                target = make_room();
+            } else {
+                auto v = rd.get(1), n = rd.get(1);
+                auto b = rd.data(n);
+                if (!rd.done() || v > 1 || n > 16) {
+                    reject(peer, "Invalid join");
+                    return;
+                }
+                role = static_cast<Role>(v);
+                std::string code(b.begin(), b.end());
+                for (auto& [id, r] : rooms)
+                    if (r.view.room_code == code)
+                        target = &r;
+            }
+            if (!target) {
+                reject(peer, "Room unavailable");
+                return;
+            }
+            join(peer, c, *target, role);
             return;
-        if (p.tag == Tag::ready) {
-            auto ready = r.get(1);
-            if (!r.done() || ready > 1) {
-                reject(peer, "Invalid ready");
+        }
+        if (p.tag == Tag::leave_room) {
+            if (!rd.done()) {
+                reject(peer, "Invalid leave");
                 return;
             }
-            if (view.phase == Phase::waiting) {
-                slots[c.player - 1].ready = ready != 0;
-                lobby();
-            }
-        } else if (p.tag == Tag::input) {
-            auto match = r.get(8), count = r.get(1);
-            if (match != match_id || count < 1 || count > 8 || p.body.size() != 9 + count * 16) {
-                reject(peer, "Invalid input batch");
-                return;
-            }
-            std::vector<Input> inputs;
-            for (std::uint64_t i = 0; i < count; ++i)
-                inputs.push_back({r.get(8),
-                                  static_cast<std::uint32_t>(r.get(4)),
-                                  static_cast<std::uint32_t>(r.get(4))});
-            if (!r.done()) {
-                reject(peer, "Truncated input");
-                return;
-            }
-            if (view.phase == Phase::playing)
-                for (auto in : inputs)
-                    slots[c.player - 1].input.accept(in, view.authoritative.tick);
-        } else if (p.tag == Tag::snapshot_ack) {
-            auto id = r.get(4);
-            if (!r.done()) {
+            detach(peer, c, true);
+            welcome(peer, c);
+            return;
+        }
+        auto* r = room(c);
+        if (!r || !c.player)
+            return;
+        auto& v = r->view;
+        auto& s = r->slots.at(c.player);
+        if (p.tag == Tag::snapshot_ack) {
+            auto id = rd.get(4);
+            if (!rd.done()) {
                 reject(peer, "Invalid snapshot ack");
                 return;
             }
             if (id == c.snapshot)
                 c.snapshot = 0;
-        } else {
+        } else if (p.tag == Tag::ready) {
+            auto ready = rd.get(1);
+            if (!rd.done() || ready > 1) {
+                reject(peer, "Invalid ready");
+                return;
+            }
+            if (s.role == Role::player && v.phase == Phase::waiting) {
+                s.ready = ready != 0;
+                lobby(*r);
+            }
+        } else if (p.tag == Tag::return_lobby) {
+            if (!rd.done()) {
+                reject(peer, "Invalid return");
+                return;
+            }
+            refresh(*r);
+            if (v.phase == Phase::results && c.player == v.manager_id) {
+                for (auto i = r->slots.begin(); i != r->slots.end();)
+                    if (!i->second.peer)
+                        i = r->slots.erase(i);
+                    else {
+                        i->second.ready = false;
+                        i->second.input.clear();
+                        if (!random_bytes(i->second.credential)) {
+                            failure = "Secure random unavailable";
+                            return;
+                        }
+                        ++i;
+                    }
+                v.phase = Phase::waiting;
+                v.countdown = 0;
+                v.has_snapshot = false;
+                v.authoritative = {};
+                v.match_id = random_id();
+                for (auto& [p2, c2] : connections)
+                    if (c2.room == v.room_id) {
+                        c2.snapshot = 0;
+                        c2.result_sent = false;
+                        welcome(p2, c2);
+                    }
+                lobby(*r);
+            }
+        } else if (p.tag == Tag::featured) {
+            auto id = rd.get(2);
+            if (!rd.done() || id > 65535) {
+                reject(peer, "Invalid featured");
+                return;
+            }
+        } else if (p.tag == Tag::input) {
+            auto mid = rd.get(8), count = rd.get(1);
+            if (mid != v.match_id || count < 1 || count > 8 || p.body.size() != 9 + count * 16) {
+                reject(peer, "Invalid input batch");
+                return;
+            }
+            for (std::uint64_t i = 0; i < count; ++i) {
+                Input in{rd.get(8),
+                         static_cast<std::uint32_t>(rd.get(4)),
+                         static_cast<std::uint32_t>(rd.get(4))};
+                if (s.role == Role::player && v.phase == Phase::playing)
+                    s.input.accept(in, v.authoritative.tick);
+            }
+        } else
             reject(peer, "Unexpected message");
-        }
     }
     void tick() {
         if (!host)
             return;
         ENetEvent event{};
         unsigned count = 0;
-        while (count++ < 256 && enet_host_service(host, &event, 0) > 0) {
+        while (count++ < 4096 && enet_host_service(host, &event, 0) > 0) {
             if (event.type == ENET_EVENT_TYPE_CONNECT) {
                 Connection c;
                 c.opened = c.window = room_tick;
@@ -363,58 +563,122 @@ struct Server::Impl {
         }
         ++room_tick;
         std::vector<ENetPeer*> expired;
-        for (auto& [peer, c] : connections)
-            if (((!c.hello || !c.player) && room_tick - c.opened > 300) ||
+        for (auto& [p, c] : connections)
+            if ((!c.hello && room_tick - c.opened > 300) ||
+                (c.recovering && room_tick - c.opened > 300) ||
                 (c.snapshot && room_tick - c.sent_at > 300))
-                expired.push_back(peer);
-        for (auto* peer : expired) {
-            enet_peer_disconnect_now(peer, 3);
-            drop(peer);
+                expired.push_back(p);
+        for (auto* p : expired) {
+            enet_peer_disconnect_now(p, 3);
+            drop(p);
         }
-        if (view.phase == Phase::waiting && slots[0].occupied && slots[1].occupied &&
-            slots[0].ready && slots[1].ready) {
-            view.phase = Phase::countdown;
-            view.countdown = 180;
-            lobby();
-        } else if (view.phase == Phase::countdown) {
-            if (view.countdown)
-                --view.countdown;
-            if (!view.countdown) {
-                view.authoritative =
-                    options.initial_state
-                        ? *options.initial_state
-                        : match::initial_state({1, 2}, options.seed, options.preset);
-                view.has_snapshot = true;
-                view.phase = Phase::playing;
-                lobby();
-            } else if (view.countdown % 30 == 0)
-                lobby();
-        } else if (view.phase == Phase::playing) {
-            std::vector<std::uint32_t> held;
-            for (auto& slot : slots)
-                held.push_back(slot.peer ? slot.input.consume(view.authoritative.tick) : 0);
-            std::string error;
-            if (!match::advance(view.authoritative, held, nullptr, error)) {
-                failure = error;
-                view.phase = Phase::error;
-            } else if (view.authoritative.result != match::Result::playing) {
-                view.phase = Phase::results;
-                for (auto& slot : slots)
-                    slot.credential = {};
+        for (auto& [rid, r] : rooms) {
+            auto& v = r.view;
+            unsigned players = 0;
+            bool ready = true;
+            for (auto& [id, s] : r.slots)
+                if (s.role == Role::player) {
+                    ++players;
+                    ready &= s.peer && s.ready;
+                }
+            if (v.phase == Phase::waiting && players >= 2 && ready) {
+                v.phase = Phase::countdown;
+                v.countdown = 180;
+                lobby(r);
+            } else if (v.phase == Phase::countdown) {
+                if (v.countdown)
+                    --v.countdown;
+                if (!v.countdown) {
+                    std::vector<std::uint16_t> ids;
+                    for (auto& [id, s] : r.slots)
+                        if (s.role == Role::player)
+                            ids.push_back(id);
+                    v.authoritative =
+                        options.initial_state && ids == std::vector<std::uint16_t>{1, 2}
+                            ? *options.initial_state
+                            : match::initial_state(ids, options.seed, options.preset);
+                    v.has_snapshot = true;
+                    v.phase = Phase::playing;
+                    lobby(r);
+                } else if (v.countdown % 30 == 0)
+                    lobby(r);
+            } else if (v.phase == Phase::playing) {
+                std::vector<std::uint32_t> held;
+                for (auto& p : v.authoritative.players) {
+                    auto i = r.slots.find(p.id);
+                    held.push_back(i != r.slots.end() && i->second.peer
+                                       ? i->second.input.consume(v.authoritative.tick)
+                                       : 0);
+                }
+                std::string err;
+                if (!match::advance(v.authoritative, held, nullptr, err)) {
+                    failure = err;
+                    v.phase = Phase::error;
+                } else if (v.authoritative.result != match::Result::playing) {
+                    v.phase = Phase::results;
+                    for (auto& [id, s] : r.slots)
+                        s.credential = {};
+                    lobby(r);
+                }
             }
+            if (v.has_snapshot) {
+                v.server_tick = v.accepted_through = v.authoritative.tick;
+                ++v.snapshot_revision;
+            }
+            if (v.has_snapshot)
+                for (auto& [p, c] : connections)
+                    if (c.room == rid &&
+                        (v.phase == Phase::results ||
+                         v.authoritative.tick % (c.role == Role::spectator ? 12 : 3) == 0))
+                        snapshot(p, c);
         }
-        if (view.has_snapshot) {
-            view.server_tick = view.accepted_through = view.authoritative.tick;
-            view.snapshot_revision++;
-        }
-        if (view.has_snapshot && (view.authoritative.tick % 3 == 0 || view.phase == Phase::results))
-            for (auto& [peer, c] : connections)
-                snapshot(peer, c);
+        // Preserve disconnected slots for the complete core reconnect grace period.
+        // Once a deserted match ends there is nobody left to request a rematch.
+        for (auto& [rid, r] : rooms)
+            if (r.view.phase == Phase::results &&
+                std::none_of(r.slots.begin(), r.slots.end(), [](const auto& entry) {
+                    return entry.second.peer != nullptr;
+                })) {
+                r.slots.clear();
+                if (rid == default_room) {
+                    auto& v = r.view;
+                    v.phase = Phase::waiting;
+                    v.countdown = 0;
+                    v.has_snapshot = false;
+                    v.authoritative = {};
+                    v.server_tick = v.accepted_through = 0;
+                    v.match_id = random_id();
+                    if (!v.match_id)
+                        failure = "Secure random unavailable";
+                    refresh(r);
+                }
+            }
+        for (auto i = rooms.begin(); i != rooms.end();)
+            if (i->first != default_room && i->second.slots.empty())
+                i = rooms.erase(i);
+            else
+                ++i;
+        if (!rooms.empty())
+            view = rooms.at(default_room).view;
         enet_host_flush(host);
+        metrics.sent_bytes += static_cast<enet_uint32>(host->totalSentData - previous_sent);
+        previous_sent = host->totalSentData;
+        metrics.received_bytes +=
+            static_cast<enet_uint32>(host->totalReceivedData - previous_received);
+        previous_received = host->totalReceivedData;
+        metrics.connections = connections.size();
+        metrics.rooms = rooms.size();
+        metrics.snapshots_inflight = 0;
+        for (auto& [p, c] : connections)
+            if (c.snapshot)
+                ++metrics.snapshots_inflight;
     }
 };
 Server::Server(const ServerOptions& o) : impl_(std::make_unique<Impl>(o)) {}
 Server::~Server() = default;
+ServerMetrics Server::metrics() const {
+    return impl_->metrics;
+}
 bool Server::valid() const {
     return impl_->host && impl_->failure.empty();
 }

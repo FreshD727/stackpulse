@@ -48,7 +48,7 @@ std::vector<std::uint8_t> encode(const Packet& p) {
         return {};
     Writer w;
     w.put(0x33445053, 4);
-    w.put(1, 1);
+    w.put(2, 1);
     w.put(static_cast<unsigned>(p.tag), 1);
     w.put(p.body.size(), 2);
     w.put(p.session, 8);
@@ -59,10 +59,10 @@ bool decode(std::span<const std::uint8_t> b, Packet& out) {
     if (b.size() < 16 || b.size() > max_packet)
         return false;
     Reader r{b};
-    if (r.get(4) != 0x33445053 || r.get(1) != 1)
+    if (r.get(4) != 0x33445053 || r.get(1) != 2)
         return false;
     auto t = r.get(1), n = r.get(2), s = r.get(8);
-    if (t < 1 || t > 10 || n != b.size() - 16)
+    if (t < 1 || t > 15 || n != b.size() - 16)
         return false;
     Packet p{static_cast<Tag>(t), s, r.data(static_cast<std::size_t>(n))};
     if (!r.done())
@@ -99,7 +99,7 @@ bool Assembly::add(Reader& r, std::uint64_t now, std::vector<std::uint8_t>& comp
          c = static_cast<std::uint32_t>(r.get(2)), n = static_cast<std::uint32_t>(r.get(4)),
          offset = static_cast<std::uint32_t>(r.get(4));
     auto data = r.data(r.bytes.size() - r.offset);
-    if (!r.done() || !id || !n || n > max_object || !c || c > 256 ||
+    if (!r.done() || !id || !n || n > max_object || !c || c > 1024 ||
         c != (n + chunk_size - 1) / chunk_size || index >= c || offset != index * chunk_size ||
         offset >= n || data.size() != std::min<std::size_t>(chunk_size, n - offset)) {
         reset();

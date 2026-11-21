@@ -3,7 +3,7 @@
 #include <stackpulse/protocol.hpp>
 using namespace stackpulse::net;
 using namespace stackpulse::net::wire;
-TEST_CASE("SPD3 envelope validates exact bounded lengths and tags", "[network][codec]") {
+TEST_CASE("SPD3 revision 2 envelope validates exact bounded lengths and tags", "[network][codec]") {
     Packet p{Tag::hello, 0, {5, 0, 0, 0, 0, 0}}, out;
     auto bytes = encode(p);
     REQUIRE(bytes.size() == 22);
@@ -73,4 +73,22 @@ TEST_CASE("Input admission first wins bounded future missing six then neutral",
     REQUIRE(a.accept({18, 4, 2}, 18));
     REQUIRE(a.consume(18) == 2);
     REQUIRE(a.pending.size() <= 121);
+}
+
+TEST_CASE("M4 codec rejects old revision and assembles maximum eight-board object",
+          "[network][codec]") {
+    auto bytes = encode({Tag::hello, 0, {}});
+    Packet out;
+    bytes[4] = 1;
+    REQUIRE_FALSE(decode(bytes, out));
+    std::vector<std::uint8_t> object(max_object, 73);
+    auto packets = chunks(1, 9, object);
+    REQUIRE(packets.size() <= 1024);
+    Assembly a;
+    std::vector<std::uint8_t> complete;
+    for (auto& p : packets) {
+        Reader r{p.body};
+        REQUIRE(a.add(r, 1, complete));
+    }
+    REQUIRE(complete == object);
 }

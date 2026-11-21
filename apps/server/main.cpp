@@ -19,7 +19,9 @@ int main(int argc, char** argv) {
                 options.preset = stackpulse::modern::Preset::modern;
             else
                 return 2;
-        } else if ((arg == "--port" || arg == "--ticks") && i + 1 < argc) {
+        } else if ((arg == "--port" || arg == "--ticks" || arg == "--players" ||
+                    arg == "--spectators" || arg == "--rooms") &&
+                   i + 1 < argc) {
             std::string_view value = argv[++i];
             std::uint64_t n{};
             auto result = std::from_chars(value.data(), value.data() + value.size(), n);
@@ -29,6 +31,18 @@ int main(int argc, char** argv) {
                 if (!n || n > 65535)
                     return 2;
                 options.port = static_cast<std::uint16_t>(n);
+            } else if (arg == "--players") {
+                if (n < 2 || n > 8)
+                    return 2;
+                options.players = static_cast<std::uint8_t>(n);
+            } else if (arg == "--spectators") {
+                if (n > 16)
+                    return 2;
+                options.spectators = static_cast<std::uint8_t>(n);
+            } else if (arg == "--rooms") {
+                if (!n || n > 8)
+                    return 2;
+                options.rooms = static_cast<std::uint8_t>(n);
             } else
                 limit = n;
         } else
@@ -39,7 +53,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", server.error().c_str());
         return 1;
     }
-    std::printf("Stackpulse duel UDP %s:%u rules v%u %s\n",
+    std::printf("Stackpulse rooms UDP %s:%u rules v%u %s\n",
                 options.bind.c_str(),
                 options.port,
                 stackpulse::modern::rules_version,
@@ -54,6 +68,8 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "%s\n", server.error().c_str());
             return 1;
         }
+        if (server.view().phase != stackpulse::net::Phase::results)
+            result_logged = false;
         if (!result_logged && server.view().phase == stackpulse::net::Phase::results) {
             std::printf("AUTHORITATIVE_RESULT tick=%llu result=%s hash=%016llx\n",
                         static_cast<unsigned long long>(server.view().authoritative.tick),

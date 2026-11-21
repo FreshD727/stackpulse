@@ -143,6 +143,195 @@ std::string number(std::uint64_t value) {
 }
 
 #ifdef STACKPULSE_NETWORK
+// Controller-only defaults connect to the shared localhost room. Text fields also
+// accept keyboard editing; Left/Right selects localhost or the saved recent host.
+std::optional<stackpulse::net::ConnectOptions>
+online_menu(SDL_Renderer* renderer,
+            modern::Preset preset,
+            const std::filesystem::path& preferences,
+            bool& quit,
+            int smoke_frames = 0,
+            const std::filesystem::path& capture_path = {}) {
+    namespace net = stackpulse::net;
+    net::ConnectOptions options;
+    options.preset = preset;
+    options.name = "Player" + std::to_string(SDL_GetTicks() % 10000);
+    std::string recent = "127.0.0.1";
+    std::ifstream saved(preferences);
+    std::getline(saved, recent);
+    if (recent.empty() || recent.size() > 128)
+        recent = "127.0.0.1";
+    std::string port = std::to_string(options.port);
+    int selected = 0, rendered_frames = 0;
+    bool editing = false, done = false, accepted = false;
+    std::string notice = "DEFAULT ROOM: NO CODE NEEDED / 2-8 PLAYERS";
+    std::map<SDL_JoystickID, SDL_Gamepad*> controllers;
+    auto open = [&](SDL_JoystickID id) {
+        if (!controllers.contains(id))
+            if (auto* pad = SDL_OpenGamepad(id))
+                controllers.emplace(id, pad);
+    };
+    int count = 0;
+    auto* ids = SDL_GetGamepads(&count);
+    for (int i = 0; i < count; ++i)
+        open(ids[i]);
+    SDL_free(ids);
+    auto field = [&]() -> std::string* {
+        if (selected == 0)
+            return &options.host;
+        if (selected == 1)
+            return &port;
+        if (selected == 2)
+            return &options.room_code;
+        if (selected == 4)
+            return &options.name;
+        return nullptr;
+    };
+    while (!done) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_EVENT_QUIT) {
+                quit = true;
+                done = true;
+            } else if (e.type == SDL_EVENT_GAMEPAD_ADDED)
+                open(e.gdevice.which);
+            else if (e.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                if (auto it = controllers.find(e.gdevice.which); it != controllers.end()) {
+                    SDL_CloseGamepad(it->second);
+                    controllers.erase(it);
+                }
+            } else if (e.type == SDL_EVENT_TEXT_INPUT && editing) {
+                if (auto* value = field();
+                    value &&
+                    value->size() + std::string(e.text.text).size() <= (selected == 0   ? 128U
+                                                                        : selected == 4 ? 24U
+                                                                        : selected == 2 ? 16U
+                                                                                        : 5U))
+                    *value += e.text.text;
+            } else if ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) ||
+                       e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+                const bool pad = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+                const int code = pad ? e.gbutton.button : e.key.scancode;
+                auto key = [&](int k, int b) { return code == (pad ? b : k); };
+                if (key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST) ||
+                    (pad && code == SDL_GAMEPAD_BUTTON_BACK)) {
+                    if (editing) {
+                        editing = false;
+                        SDL_StopTextInput(SDL_GetRenderWindow(renderer));
+                    } else
+                        done = true;
+                } else if (editing) {
+                    if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH)) {
+                        editing = false;
+                        SDL_StopTextInput(SDL_GetRenderWindow(renderer));
+                    } else if (!pad && code == SDL_SCANCODE_BACKSPACE) {
+                        if (auto* value = field(); value && !value->empty()) {
+                            auto at = value->size() - 1;
+                            while (at && (static_cast<unsigned char>((*value)[at]) & 0xc0) == 0x80)
+                                --at;
+                            value->erase(at);
+                        }
+                    }
+                } else if (key(SDL_SCANCODE_UP, SDL_GAMEPAD_BUTTON_DPAD_UP))
+                    selected = (selected + 8) % 9;
+                else if (key(SDL_SCANCODE_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
+                    selected = (selected + 1) % 9;
+                else if (key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT) ||
+                         key(SDL_SCANCODE_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) {
+                    if (selected == 0)
+                        options.host = options.host == "127.0.0.1" ? recent : "127.0.0.1";
+                    else if (selected == 1) {
+                        unsigned value = options.port;
+                        value = key(SDL_SCANCODE_LEFT, SDL_GAMEPAD_BUTTON_DPAD_LEFT)
+                                    ? (value > 1 ? value - 1 : 65535)
+                                    : (value < 65535 ? value + 1 : 1);
+                        options.port = static_cast<std::uint16_t>(value);
+                        port = std::to_string(value);
+                    } else if (selected == 2)
+                        options.room_code.clear();
+                    else if (selected == 3)
+                        options.role = options.role == net::Role::player ? net::Role::spectator
+                                                                         : net::Role::player;
+                } else if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH)) {
+                    if (selected == 3)
+                        options.role = options.role == net::Role::player ? net::Role::spectator
+                                                                         : net::Role::player;
+                    else if (selected == 8)
+                        done = true;
+                    else if (selected >= 5) {
+                        unsigned value = 0;
+                        auto parsed =
+                            std::from_chars(port.data(), port.data() + port.size(), value);
+                        if (options.host.empty() || options.name.empty() ||
+                            parsed.ec != std::errc{} || parsed.ptr != port.data() + port.size() ||
+                            !value || value > 65535) {
+                            notice = "ENTER AN ADDRESS, NAME AND PORT 1-65535";
+                            continue;
+                        }
+                        options.port = static_cast<std::uint16_t>(value);
+                        options.create_room = selected == 6;
+                        if (selected == 7)
+                            options.role = net::Role::spectator;
+                        std::ofstream save(preferences);
+                        save << options.host << '\n';
+                        accepted = true;
+                        done = true;
+                    } else if (!pad) {
+                        editing = true;
+                        SDL_StartTextInput(SDL_GetRenderWindow(renderer));
+                    } else
+                        notice = "LEFT/RIGHT: PRESETS / KEYBOARD ENTER: EDIT TEXT";
+                }
+            }
+        }
+        color(renderer, {9, 15, 27, 255});
+        SDL_RenderClear(renderer);
+        text(renderer, 24, 18, "MULTIPLAYER / ROOM CONNECTION", mint);
+        const std::array<std::string, 9> rows{
+            "SERVER: " + options.host,
+            "PORT: " + port,
+            "ROOM: " + (options.room_code.empty() ? std::string("DEFAULT") : options.room_code),
+            std::string("ROLE: ") + (options.role == net::Role::player ? "PLAYER" : "SPECTATOR"),
+            "NAME: " + options.name,
+            "JOIN ROOM",
+            "CREATE PRIVATE ROOM",
+            "WATCH ROOM",
+            "BACK"};
+        for (int i = 0; i < 9; ++i)
+            text(renderer,
+                 28,
+                 53.F + i * 25.F,
+                 std::string(selected == i ? "> " : "  ") + rows[i].substr(0, 68),
+                 selected == i ? mint : ink);
+        text(renderer,
+             24,
+             291,
+             editing ? "EDITING / ENTER DONE / BACKSPACE ERASE"
+                     : "UP/DOWN SELECT / ENTER OR SOUTH CONFIRM",
+             muted);
+        text(renderer, 24, 308, "LEFT/RIGHT CHANGE / ESC OR EAST BACK", muted);
+        text(renderer, 24, 333, notice.substr(0, 73), mint);
+        if (smoke_frames && ++rendered_frames >= smoke_frames) {
+            if (!capture_path.empty()) {
+                SDL_Surface* capture = SDL_RenderReadPixels(renderer, nullptr);
+                if (!capture || !SDL_SaveBMP(capture, capture_path.string().c_str()))
+                    std::fprintf(stderr, "Menu capture: %s\n", SDL_GetError());
+                SDL_DestroySurface(capture);
+            }
+            done = true;
+        }
+        SDL_RenderPresent(renderer);
+        SDL_Delay(8);
+    }
+    SDL_StopTextInput(SDL_GetRenderWindow(renderer));
+    for (auto [id, pad] : controllers) {
+        (void)id;
+        SDL_CloseGamepad(pad);
+    }
+    if (accepted)
+        return options;
+    return {};
+}
 int run_online(SDL_Renderer* renderer,
                const Settings& settings,
                ClientAudio& audio,
@@ -151,11 +340,22 @@ int run_online(SDL_Renderer* renderer,
                modern::Preset preset,
                bool bot,
                std::uint64_t exit_ticks,
-               const std::filesystem::path& capture_path = {}) {
+               const std::filesystem::path& capture_path = {},
+               const stackpulse::net::ConnectOptions* room_options = nullptr,
+               std::uint64_t capture_tick = 0,
+               std::uint64_t ready_delay_ms = 0) {
     namespace net = stackpulse::net;
     net::Client connection;
     client::OnlinePrediction prediction;
-    if (!connection.connect(host, port, preset)) {
+    net::ConnectOptions options;
+    if (room_options)
+        options = *room_options;
+    else {
+        options.host = host;
+        options.port = port;
+        options.preset = preset;
+    }
+    if (!connection.connect(options)) {
         std::fprintf(stderr, "Online connection: %s\n", connection.view().detail.c_str());
         return 1;
     }
@@ -175,10 +375,15 @@ int run_online(SDL_Renderer* renderer,
     auto next_tick = boundary + 1'000'000'000 / 60;
     auto started = boundary;
     std::uint64_t result_time = 0, snapshot_time = boundary, clock_tick = 0;
-    std::uint64_t previous_revision = 0;
+    std::uint64_t previous_revision = 0, room_epoch = 0, match_epoch = 0;
+    std::uint16_t previous_player = 0, featured = 0;
+    bool target_held = false;
+    int overlay_selection = 0;
+    bool live_captured = false;
     bool running = true, focused = true, overlay = false, terminal = false,
          quit_application = false, ready_requested = false;
     auto release = [&]() {
+        target_held = false;
         input.release_all(std::max(SDL_GetTicksNS(), boundary + 1));
         for (auto& [id, pad] : pads) {
             (void)id;
@@ -243,14 +448,34 @@ int run_online(SDL_Renderer* renderer,
         connection.poll();
         const auto now = SDL_GetTicksNS();
         const auto& view = connection.view();
+        if (room_epoch != view.room_id || match_epoch != view.match_id ||
+            previous_player != view.player || view.phase == net::Phase::disconnected ||
+            view.phase == net::Phase::error) {
+            prediction.reset();
+            input = in::Adapter{};
+            target_held = false;
+            room_epoch = view.room_id;
+            match_epoch = view.match_id;
+            previous_player = view.player;
+            previous_revision = 0;
+            ready_requested = false;
+            terminal = false;
+            result_time = 0;
+            snapshot_time = now;
+            clock_tick = view.server_tick;
+            boundary = now;
+            next_tick = now + 1'000'000'000 / 60;
+            audio.set_playing(false);
+        }
         if (view.snapshot_revision != previous_revision && view.has_snapshot) {
-            if (prediction.apply(view)) {
+            if (view.role == net::Role::spectator || prediction.apply(view)) {
                 previous_revision = view.snapshot_revision;
                 snapshot_time = now;
                 clock_tick = view.server_tick;
             }
         }
-        if (bot && view.phase == net::Phase::waiting && !view.ready && !ready_requested) {
+        if (bot && view.role == net::Role::player && view.phase == net::Phase::waiting &&
+            !view.ready && !ready_requested && (now - started) / 1'000'000 >= ready_delay_ms) {
             connection.set_ready(true);
             ready_requested = true;
         }
@@ -267,6 +492,7 @@ int run_online(SDL_Renderer* renderer,
             else if (event.type == SDL_EVENT_GAMEPAD_ADDED)
                 open_pad(event.gdevice.which);
             else if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                target_held = false;
                 input.release_device(std::max(event.gdevice.timestamp, boundary + 1),
                                      event.gdevice.which);
                 if (auto it = pads.find(event.gdevice.which); it != pads.end()) {
@@ -274,6 +500,7 @@ int run_online(SDL_Renderer* renderer,
                     pads.erase(it);
                 }
             } else if (event.type == SDL_EVENT_KEYBOARD_REMOVED) {
+                target_held = false;
                 input.release_device(std::max(event.kdevice.timestamp, boundary + 1),
                                      keyboard | event.kdevice.which);
             } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP ||
@@ -285,8 +512,44 @@ int run_online(SDL_Renderer* renderer,
                 const int code = pad ? event.gbutton.button : event.key.scancode;
                 if ((!pad && event.key.repeat) || (!focused && !bot))
                     continue;
+                if ((!pad && code == SDL_SCANCODE_TAB) ||
+                    (pad && code == SDL_GAMEPAD_BUTTON_RIGHT_STICK)) {
+                    target_held = down;
+                    if (down && view.role == net::Role::spectator && view.has_snapshot &&
+                        !view.authoritative.players.empty()) {
+                        const auto& players = view.authoritative.players;
+                        auto it = std::find_if(players.begin(), players.end(), [&](const auto& p) {
+                            return p.id == featured;
+                        });
+                        featured = it == players.end() || ++it == players.end() ? players.front().id
+                                                                                : it->id;
+                        connection.set_featured(featured);
+                    }
+                    continue;
+                }
                 const auto logical = action(code, pad);
                 if (down) {
+                    if (overlay &&
+                        ((!pad && (code == SDL_SCANCODE_UP || code == SDL_SCANCODE_DOWN)) ||
+                         (pad && (code == SDL_GAMEPAD_BUTTON_DPAD_UP ||
+                                  code == SDL_GAMEPAD_BUTTON_DPAD_DOWN)))) {
+                        const bool up =
+                            pad ? code == SDL_GAMEPAD_BUTTON_DPAD_UP : code == SDL_SCANCODE_UP;
+                        overlay_selection = (overlay_selection + (up ? 2 : 1)) % 3;
+                        continue;
+                    }
+                    if (overlay && ((!pad && code == SDL_SCANCODE_RETURN) ||
+                                    (pad && code == SDL_GAMEPAD_BUTTON_SOUTH))) {
+                        release();
+                        if (overlay_selection == 1) {
+                            ready_requested = false;
+                            prediction.reset();
+                            connection.reconnect();
+                        } else if (overlay_selection == 2)
+                            running = false;
+                        overlay = false;
+                        continue;
+                    }
                     if ((!pad && code == SDL_SCANCODE_F10) ||
                         (pad && code == SDL_GAMEPAD_BUTTON_BACK)) {
                         running = false;
@@ -295,14 +558,24 @@ int run_online(SDL_Renderer* renderer,
                     }
                     if (!pad && code == SDL_SCANCODE_F9) {
                         release();
+                        ready_requested = false;
+                        prediction.reset();
                         connection.reconnect();
                         continue;
                     }
                     if ((!pad && code == SDL_SCANCODE_RETURN) ||
                         (pad && code == SDL_GAMEPAD_BUTTON_SOUTH &&
-                         view.phase == net::Phase::waiting)) {
-                        if (view.phase == net::Phase::waiting)
+                         (view.phase == net::Phase::waiting ||
+                          view.phase == net::Phase::results))) {
+                        if (view.phase == net::Phase::results) {
+                            if (view.member_id == view.manager_id)
+                                connection.return_to_lobby();
+                            ready_requested = false;
+                        } else if (view.phase == net::Phase::waiting &&
+                                   view.role == net::Role::player)
                             connection.set_ready(!view.ready);
+                        if (view.phase != net::Phase::playing)
+                            continue;
                     }
                     if (logical == in::Action::pause) {
                         overlay = !overlay;
@@ -310,7 +583,8 @@ int run_online(SDL_Renderer* renderer,
                         continue;
                     }
                 }
-                if (logical && *logical != in::Action::pause && !overlay)
+                if (logical && *logical != in::Action::pause && !overlay &&
+                    view.role == net::Role::player)
                     transition(pad ? event.gbutton.timestamp : event.key.timestamp,
                                pad ? event.gbutton.which : keyboard | event.key.which,
                                static_cast<std::uint32_t>(code),
@@ -341,15 +615,19 @@ int run_online(SDL_Renderer* renderer,
                 }
             }
         }
-        audio.set_playing(view.phase == net::Phase::playing && !overlay && (focused || bot));
+        audio.set_playing(view.role == net::Role::player && view.phase == net::Phase::playing &&
+                          !overlay && (focused || bot));
         int catchup = 0;
         while (next_tick <= now && catchup++ < 8) {
             boundary = next_tick;
             next_tick += 1'000'000'000 / 60;
             const auto sampled = input.sample(boundary);
-            if (view.phase != net::Phase::playing || !prediction.initialized())
+            if (view.role == net::Role::spectator || view.phase != net::Phase::playing ||
+                !prediction.initialized())
                 continue;
             auto mask = overlay || (!focused && !bot) ? 0U : client::modern_input(sampled, preset);
+            if (target_held && !overlay && focused)
+                mask |= modern::target_next;
             if (bot) {
                 const auto tick = prediction.board().tick;
                 mask = modern::down;
@@ -403,7 +681,7 @@ int run_online(SDL_Renderer* renderer,
             running = false;
         color(renderer, {9, 15, 27, 255});
         SDL_RenderClear(renderer);
-        text(renderer, 20, 14, "STACKPULSE / AUTHORITATIVE DUEL", mint);
+        text(renderer, 20, 14, "STACKPULSE / AUTHORITATIVE ROOM", mint);
         text(renderer,
              20,
              32,
@@ -422,90 +700,203 @@ int run_online(SDL_Renderer* renderer,
         text(renderer,
              360,
              32,
-             "PLAYER " + number(view.player) + " / SERVER " + number(view.server_tick),
+             (view.role == net::Role::spectator ? std::string("SPECTATOR")
+                                                : "PLAYER " + number(view.player)) +
+                 " / SERVER " + number(view.server_tick),
              muted);
-        if (prediction.initialized()) {
-            const auto& board = prediction.board();
-            draw_board(board, 150, 61, 14, true);
-            text(renderer, 324, 64, "NEXT", mint);
-            for (std::size_t i = 0; i < board.next.size(); ++i) {
-                modern::Active next{
-                    board.next[i], modern::spawn_rotation(board.next[i], board.preset), 0, 0};
-                for (auto c : modern::cells(next))
-                    block(renderer,
-                          324 + c.x * 10.F,
-                          83 + static_cast<float>(i) * 39.F + c.y * 10.F,
-                          client::classic_palette_piece(next.piece),
-                          modern::gravity_interval(board),
-                          10);
-            }
-            text(renderer, 16, 177, board.hold_used ? "HOLD / USED" : "HOLD", muted);
-            if (board.has_hold)
-                for (auto c : modern::cells({board.held_piece,
-                                             modern::spawn_rotation(board.held_piece, board.preset),
-                                             0,
-                                             0}))
-                    block(renderer,
-                          98 + c.x * 8.F,
-                          177 + c.y * 8.F,
-                          client::classic_palette_piece(board.held_piece),
-                          modern::gravity_interval(board),
-                          8);
-        } else
-            text(renderer, 150, 100, "WAITING FOR SNAPSHOT", muted);
-        if (view.has_snapshot)
-            for (const auto& opponent : view.authoritative.players)
-                if (opponent.id != view.player) {
-                    draw_board(opponent.board, 411, 87, 10);
-                    text(renderer, 408, 65, "OPPONENT / AUTHORITATIVE", mint);
-                }
-        text(renderer, 16, 68, "LOCAL PREDICTED", mint);
-        if (prediction.initialized()) {
-            text(renderer, 16, 96, "SCORE " + number(prediction.board().score));
-            text(renderer, 16, 115, "LINES " + number(prediction.board().lines));
-            unsigned incoming = 0;
-            if (view.has_snapshot)
-                for (const auto& player : view.authoritative.players)
-                    if (player.id == view.player)
-                        for (const auto& packet : player.board.incoming)
-                            incoming += packet.rows;
-            text(renderer, 16, 143, "INCOMING " + number(incoming), mint);
-            for (unsigned row = 0; row < std::min(incoming, 20U); ++row)
-                rect(renderer, 306, 330.F - row * 12.F, 7, 10, {248, 130, 88, 255});
-            text(renderer, 16, 164, "RESYNCS " + number(prediction.hard_resets()), muted);
+        const bool watching = view.role == net::Role::spectator;
+        const modern::State* main_board = prediction.initialized() ? &prediction.board() : nullptr;
+        std::uint16_t main_id = view.player;
+        if (watching && view.has_snapshot && !view.authoritative.players.empty()) {
+            auto it = std::find_if(view.authoritative.players.begin(),
+                                   view.authoritative.players.end(),
+                                   [&](const auto& p) { return p.id == featured; });
+            if (it == view.authoritative.players.end())
+                it = view.authoritative.players.begin();
+            main_board = &it->board;
+            main_id = featured = it->id;
         }
-        if (view.phase == net::Phase::waiting) {
-            text(renderer, 16, 203, view.ready ? "YOU: READY" : "ENTER / SOUTH: READY", mint);
+        auto player_label = [&](std::uint16_t id) {
+            auto it = std::find_if(view.members.begin(), view.members.end(), [&](const auto& m) {
+                return m.player == id && m.role == net::Role::player;
+            });
+            return it == view.members.end() ? "P" + number(id) : it->name;
+        };
+        std::uint16_t selected_target = 0;
+        if (!watching && view.has_snapshot)
+            for (const auto& player : view.authoritative.players)
+                if (player.id == view.player)
+                    selected_target = player.target;
+        text(renderer, 16, 58, watching ? "SPECTATING" : "LOCAL PREDICTED", mint);
+        if (main_board) {
+            draw_board(*main_board, 165, 74, 12, !watching);
+            text(renderer, 165, 57, player_label(main_id).substr(0, 16), mint);
+            text(renderer, 16, 83, "SCORE " + number(main_board->score));
+            text(renderer, 16, 101, "LINES " + number(main_board->lines));
+            unsigned incoming = 0;
+            for (const auto& packet : main_board->incoming)
+                incoming += packet.rows;
+            text(renderer, 16, 119, "INCOMING " + number(incoming), mint);
+            text(renderer, 16, 143, main_board->hold_used ? "HOLD USED" : "HOLD", muted);
+            if (main_board->has_hold)
+                for (auto c : modern::cells(
+                         {main_board->held_piece,
+                          modern::spawn_rotation(main_board->held_piece, main_board->preset),
+                          0,
+                          0}))
+                    block(renderer,
+                          92 + c.x * 7.F,
+                          141 + c.y * 7.F,
+                          client::classic_palette_piece(main_board->held_piece),
+                          modern::gravity_interval(*main_board),
+                          7);
+            text(renderer, 16, 174, "NEXT", muted);
+            for (std::size_t i = 0; i < main_board->next.size(); ++i)
+                for (auto c :
+                     modern::cells({main_board->next[i],
+                                    modern::spawn_rotation(main_board->next[i], main_board->preset),
+                                    0,
+                                    0}))
+                    block(renderer,
+                          23 + c.x * 7.F,
+                          192 + static_cast<float>(i) * 24 + c.y * 7.F,
+                          client::classic_palette_piece(main_board->next[i]),
+                          modern::gravity_interval(*main_board),
+                          7);
+            if (!watching && selected_target)
+                text(renderer,
+                     165,
+                     318,
+                     "TARGET " + player_label(selected_target).substr(0, 8),
+                     mint);
+        } else
+            text(renderer, 165, 100, "AWAITING SNAPSHOT", muted);
+        if (view.has_snapshot) {
+            unsigned slot = 0;
+            for (const auto& opponent : view.authoritative.players) {
+                if (opponent.id == main_id)
+                    continue;
+                const float x = 316.F + (slot % 4) * 79.F;
+                const float y = 76.F + (slot / 4) * 130.F;
+                draw_board(opponent.board, x, y, 5.5F);
+                const bool targeted = opponent.id == selected_target;
+                text(renderer,
+                     x,
+                     y - 14,
+                     (targeted ? "> " : "") + player_label(opponent.id).substr(0, targeted ? 7 : 9),
+                     targeted                   ? SDL_Color{255, 205, 92, 255}
+                     : opponent.board.game_over ? muted
+                                                : mint);
+                ++slot;
+            }
+        }
+        if (view.phase == net::Phase::waiting || view.phase == net::Phase::countdown ||
+            view.phase == net::Phase::results) {
+            rect(renderer, 0, 51, 640, 270, {18, 32, 47, 255});
             text(renderer,
-                 16,
-                 225,
-                 view.opponent_ready ? "OPPONENT: READY" : "OPPONENT: WAITING",
+                 32,
+                 62,
+                 "ROOM " + view.room_code + " / " + (watching ? "SPECTATOR" : "PLAYER"),
+                 mint);
+            if (view.phase == net::Phase::results) {
+                std::string result = "DRAW";
+                if (view.has_snapshot &&
+                    view.authoritative.result == stackpulse::match::Result::winner)
+                    for (const auto& p : view.authoritative.players)
+                        if (!p.placement)
+                            result = player_label(p.id).substr(0, 24) + " WINS";
+                text(renderer, 32, 85, "SERVER RESULT: " + result, mint);
+                text(renderer,
+                     32,
+                     106,
+                     view.member_id == view.manager_id ? "ENTER / SOUTH: RETURN TO LOBBY"
+                                                       : "WAITING FOR MANAGER TO RETURN ROOM",
+                     ink);
+            } else if (view.phase == net::Phase::countdown)
+                text(renderer, 32, 85, "START IN " + number((view.countdown + 59) / 60), mint);
+            else
+                text(renderer,
+                     32,
+                     85,
+                     watching     ? "WATCHING / WAIT FOR PLAYERS"
+                     : view.ready ? "READY / ENTER OR SOUTH TO CANCEL"
+                                  : "ENTER / SOUTH: READY",
+                     mint);
+            const auto manager =
+                std::find_if(view.members.begin(), view.members.end(), [&](const auto& member) {
+                    return member.id == view.manager_id;
+                });
+            if (manager != view.members.end())
+                text(renderer,
+                     32,
+                     119,
+                     "MANAGER: " + manager->name.substr(0, 24) +
+                         (manager->role == net::Role::spectator ? " / SPECTATOR" : " / PLAYER"),
+                     muted);
+            unsigned row = 0, spectators = 0;
+            for (const auto& member : view.members) {
+                if (member.role == net::Role::spectator) {
+                    ++spectators;
+                    continue;
+                }
+                const float x = 32.F + (row / 4) * 291.F, y = 135.F + (row % 4) * 31.F;
+                text(renderer,
+                     x,
+                     y,
+                     (member.id == view.member_id ? "> " : "  ") + member.name.substr(0, 18),
+                     ink);
+                std::string state =
+                    member.connected ? (member.ready ? "READY" : "WAITING") : "RECONNECTING";
+                if (member.id == view.manager_id)
+                    state += " / MANAGER";
+                text(renderer, x + 16, y + 13, state, muted);
+                ++row;
+            }
+            text(renderer,
+                 32,
+                 278,
+                 "PLAYERS " + number(row) + "/" + number(view.player_limit) + " / SPECTATORS " +
+                     number(spectators),
                  muted);
-        } else if (view.phase == net::Phase::countdown)
-            text(renderer, 16, 203, "START IN " + number((view.countdown + 59) / 60), mint);
-        else if (terminal) {
-            std::string result = "DRAW";
-            if (view.authoritative.result == stackpulse::match::Result::winner)
-                for (const auto& player : view.authoritative.players)
-                    if (!player.placement)
-                        result = player.id == view.player ? "YOU WIN" : "OPPONENT WINS";
-            text(renderer, 16, 203, result, mint);
-            text(renderer, 16, 225, "SERVER CONFIRMED", muted);
+            text(renderer,
+                 32,
+                 298,
+                 "ALL PLAYERS READY (2+) / MANAGER RETURNS ROOM AFTER RESULT",
+                 muted);
         }
         if (overlay) {
-            rect(renderer, 328, 292, 291, 45, {26, 61, 65, 255});
-            text(renderer, 337, 302, "INPUT RELEASED / PLAY CONTINUES", mint);
-            text(renderer, 337, 319, "ESC / START RESUMES INPUT", muted);
+            rect(renderer, 306, 103, 314, 130, {26, 61, 65, 255});
+            text(renderer, 318, 114, "INPUT RELEASED / MATCH CONTINUES", mint);
+            const std::array<const char*, 3> choices{"RESUME INPUT", "RECONNECT", "LEAVE ROOM"};
+            for (int i = 0; i < 3; ++i)
+                text(renderer,
+                     318,
+                     139.F + i * 24.F,
+                     std::string(overlay_selection == i ? "> " : "  ") + choices[i],
+                     overlay_selection == i ? mint : ink);
+            text(renderer, 318, 215, "UP/DOWN / SOUTH OR ENTER", muted);
         }
-        text(renderer, 16, 268, "F9 RECONNECT", muted);
-        text(renderer, 16, 287, "F10 LEAVE", muted);
-        text(renderer, 360, 322, "ONLINE REPLAY OFF", muted);
+        text(renderer, 16, 329, "F9 RECONNECT / ESC-START MENU", muted);
+        text(renderer,
+             320,
+             329,
+             watching ? "TAB / R-STICK: FEATURE" : "TAB / R-STICK: TARGET",
+             muted);
         rect(renderer, 0, 345, 640, 15, {19, 33, 49, 255});
         text(renderer, 8, 349, view.detail.substr(0, 76), mint);
-        if (!running && !capture_path.empty()) {
+        const bool capture_live = capture_tick && !live_captured &&
+                                  view.phase == net::Phase::playing &&
+                                  view.server_tick >= capture_tick;
+        if (!capture_path.empty() && (capture_live || (!running && !capture_tick))) {
             SDL_Surface* capture = SDL_RenderReadPixels(renderer, nullptr);
             if (!capture || !SDL_SaveBMP(capture, capture_path.string().c_str()))
                 std::fprintf(stderr, "Online capture: %s\n", SDL_GetError());
+            else if (capture_live) {
+                live_captured = true;
+                std::printf("ONLINE_CAPTURE tick=%llu role=%s\n",
+                            static_cast<unsigned long long>(view.server_tick),
+                            watching ? "spectator" : "player");
+            }
             SDL_DestroySurface(capture);
         }
         SDL_RenderPresent(renderer);
@@ -550,15 +941,29 @@ int main(int argc, char** argv) {
     bool garbage_fixture = false;
     std::string online_host;
     std::uint16_t online_port = 27877;
-    std::uint64_t online_exit_ticks = 0;
-    bool online_bot = false;
+    std::uint64_t online_exit_ticks = 0, online_capture_tick = 0, online_ready_delay_ms = 0;
+    bool smoke_multiplayer_menu = false;
+    bool online_bot = false, online_spectate = false, online_create = false;
+    std::string online_room, online_name = "Player";
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         if (arg == "--connect" && i + 1 < argc)
             online_host = argv[++i];
+        else if (arg == "--smoke-multiplayer-menu")
+            smoke_multiplayer_menu = true;
+        else if (arg == "--spectate")
+            online_spectate = true;
+        else if (arg == "--create")
+            online_create = true;
+        else if (arg == "--room" && i + 1 < argc)
+            online_room = argv[++i];
+        else if (arg == "--name" && i + 1 < argc)
+            online_name = argv[++i];
         else if (arg == "--online-bot")
             online_bot = true;
-        else if ((arg == "--port" || arg == "--online-exit-ticks") && i + 1 < argc) {
+        else if ((arg == "--port" || arg == "--online-exit-ticks" ||
+                  arg == "--online-capture-tick" || arg == "--online-ready-delay-ms") &&
+                 i + 1 < argc) {
             std::uint64_t value = 0;
             const std::string_view number_arg = argv[++i];
             const auto parsed =
@@ -568,6 +973,10 @@ int main(int argc, char** argv) {
                 return 2;
             if (arg == "--port")
                 online_port = static_cast<std::uint16_t>(value);
+            else if (arg == "--online-capture-tick")
+                online_capture_tick = value;
+            else if (arg == "--online-ready-delay-ms")
+                online_ready_delay_ms = value;
             else
                 online_exit_ticks = value;
         } else if (arg == "--mode" && i + 1 < argc) {
@@ -609,14 +1018,17 @@ int main(int argc, char** argv) {
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
                          "[--smoke-settings] [--spin-debug] [--capture FILE.bmp] "
                          "[--verify FILE] [--connect HOST --port N] "
-                         "[--online-bot --online-exit-ticks N]\n");
+                         "[--spectate] [--room CODE] [--name NAME] [--create] "
+                         "[--online-bot --online-exit-ticks N] [--online-capture-tick N] "
+                         "[--online-ready-delay-ms N] [--smoke-multiplayer-menu]\n");
             return 2;
         }
     }
     if (!online_host.empty() && mode == 0)
         mode = 1;
 #ifndef STACKPULSE_NETWORK
-    if (!online_host.empty() || online_bot || online_exit_ticks) {
+    if (!online_host.empty() || online_bot || online_exit_ticks || online_capture_tick ||
+        smoke_multiplayer_menu) {
         std::fprintf(stderr, "Networking disabled in this build\n");
         return 2;
     }
@@ -696,7 +1108,30 @@ int main(int argc, char** argv) {
     if (force_sticks)
         settings.sticks = true;
 #ifdef STACKPULSE_NETWORK
+    if (smoke_multiplayer_menu) {
+        bool quit = false;
+        online_menu(renderer,
+                    mode == 2 ? modern::Preset::modern : modern::Preset::fusion,
+                    directory / "online-host.txt",
+                    quit,
+                    smoke_frames ? smoke_frames : 8,
+                    capture_path);
+        audio.shutdown();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 0;
+    }
     if (!online_host.empty()) {
+        stackpulse::net::ConnectOptions room_options;
+        room_options.host = online_host;
+        room_options.port = online_port;
+        room_options.preset = mode == 1 ? modern::Preset::fusion : modern::Preset::modern;
+        room_options.role =
+            online_spectate ? stackpulse::net::Role::spectator : stackpulse::net::Role::player;
+        room_options.name = online_name;
+        room_options.room_code = online_room;
+        room_options.create_room = online_create;
         const auto result = run_online(renderer,
                                        settings,
                                        audio,
@@ -705,7 +1140,10 @@ int main(int argc, char** argv) {
                                        mode == 1 ? modern::Preset::fusion : modern::Preset::modern,
                                        online_bot,
                                        online_exit_ticks,
-                                       capture_path);
+                                       capture_path,
+                                       &room_options,
+                                       online_capture_tick,
+                                       online_ready_delay_ms);
         audio.shutdown();
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -880,12 +1318,16 @@ int main(int argc, char** argv) {
         auto& values = pad ? settings.buttons : settings.keys;
         const auto slot = static_cast<std::size_t>(capture % 8);
         if (!pad &&
-            (code == SDL_SCANCODE_UP || code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_F1 ||
-             code == SDL_SCANCODE_F2 || code == SDL_SCANCODE_F3 || code == SDL_SCANCODE_F4 ||
-             code == SDL_SCANCODE_F5 || code == SDL_SCANCODE_F6 || code == SDL_SCANCODE_F7 ||
-             code == SDL_SCANCODE_F8 || code == SDL_SCANCODE_F9 || code == SDL_SCANCODE_F10 ||
-             code == SDL_SCANCODE_F11 || code == SDL_SCANCODE_F12)) {
+            (code == SDL_SCANCODE_TAB || code == SDL_SCANCODE_UP || code == SDL_SCANCODE_RETURN ||
+             code == SDL_SCANCODE_F1 || code == SDL_SCANCODE_F2 || code == SDL_SCANCODE_F3 ||
+             code == SDL_SCANCODE_F4 || code == SDL_SCANCODE_F5 || code == SDL_SCANCODE_F6 ||
+             code == SDL_SCANCODE_F7 || code == SDL_SCANCODE_F8 || code == SDL_SCANCODE_F9 ||
+             code == SDL_SCANCODE_F10 || code == SDL_SCANCODE_F11 || code == SDL_SCANCODE_F12)) {
             notice = "RESERVED MENU / PRACTICE KEY";
+            return;
+        }
+        if (pad && code == SDL_GAMEPAD_BUTTON_RIGHT_STICK) {
+            notice = "RESERVED ONLINE TARGET / FEATURE BUTTON";
             return;
         }
         if (pad && slot == 5 &&
@@ -968,15 +1410,24 @@ int main(int argc, char** argv) {
                 if (!save_recording())
                     return;
                 release(SDL_GetTicksNS());
-                const auto online_result =
-                    run_online(renderer,
-                               settings,
-                               audio,
-                               "127.0.0.1",
-                               online_port,
-                               mode == 2 ? modern::Preset::modern : modern::Preset::fusion,
-                               false,
-                               0);
+                bool online_quit = false;
+                const auto room =
+                    online_menu(renderer,
+                                mode == 2 ? modern::Preset::modern : modern::Preset::fusion,
+                                directory / "online-host.txt",
+                                online_quit);
+                const auto online_result = room          ? run_online(renderer,
+                                                                      settings,
+                                                                      audio,
+                                                                      room->host,
+                                                                      room->port,
+                                                                      room->preset,
+                                                                      false,
+                                                                      0,
+                                                                      {},
+                                                                      &*room)
+                                           : online_quit ? 2
+                                                         : 0;
                 if (online_result == 2)
                     running = false;
                 // The online session consumed hotplug events; refresh offline handles.
@@ -1425,7 +1876,7 @@ int main(int argc, char** argv) {
                                                   "PRACTICE LAB",
                                                   "PLAY LAST REPLAY",
                                                   "SETTINGS / CONTROLS",
-                                                  "MULTIPLAYER / LOCALHOST",
+                                                  "MULTIPLAYER / ROOMS",
                                                   "QUIT"};
             for (int i = 0; i < 7; ++i) {
                 if (selection == i)
