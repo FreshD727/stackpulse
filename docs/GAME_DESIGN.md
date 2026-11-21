@@ -1,7 +1,7 @@
 # Game design and technical plan
 
 Status: design baseline, 17 November 2026; updated 21 November 2026. Offline Classic/Fusion/Modern and authoritative 2–8-player rooms with spectators now run. The user accepted the current Fusion handling on 20 November 2026; this is a gameplay acceptance, without a hardware latency or NES fidelity claim. See M2_VALIDATION.md through M4_VALIDATION.md for executed milestone checks and remaining gates. Based on `../idea.md`.
-Current gameplay and codec compatibility are defined by [spin candidate resolution](issues/spin-candidate-resolution.md) and [issue-4 resolution](issues/issue-4-resolution.md), superseding conflicting design defaults below. The executable room protocol is SPD3 revision 2 in [its implementation contract](../src/protocol/README.md); SPN1 below remains a proposal.
+Current gameplay uses Classic rules/state v4 and shared Classic/Fusion/Modern rules/state/SPMR v6, including a per-piece soft-drop release/repress gate. Classic online boards delegate to the standalone Classic engine, carrying its full source state; Classic has no garbage and uses survival outcomes with displayed scores. Room managers select the starting level for Classic/Fusion. The [spin candidate resolution](issues/spin-candidate-resolution.md) and [issue-4 resolution](issues/issue-4-resolution.md) still define Fusion spin/preview/spawn behavior where consistent with these current changes. The executable room protocol is SPD3 revision 3 in [its implementation contract](../src/protocol/README.md); revision 1/2 peers reject, and SPN1 below remains a proposal.
 
 Companion: [development work packages](DEVELOPMENT_PLAN.md).
 

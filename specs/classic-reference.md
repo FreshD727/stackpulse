@@ -1,10 +1,10 @@
 # Classic reference contract
 
-Status: reference measurement plan, updated 2026-11-18. No fidelity approval or captured reference traces exist. Public research informs the issue-1 corrections below. M1 supplies a playable **Classic-inspired provisional ruleset**, not reference-accurate Classic. The unknowns below block fidelity approval; the provisional implementation is a separately identified design choice.
+Status: reference measurement plan, updated 2026-11-21. No fidelity approval or captured reference traces exist. Public research informs the issue-1 corrections below. M1 supplies a playable **Classic-inspired provisional ruleset**, not reference-accurate Classic. The unknowns below block fidelity approval; the provisional implementation is a separately identified design choice.
 
 ## Implemented provisional behavior
 
-`include/stackpulse/classic.hpp` and `src/core/classic.cpp` define provisional rules version 3. Remaining behavior is provisional; see the issue-1 research note below:
+`include/stackpulse/classic.hpp` and `src/core/classic.cpp` define provisional rules version 4. Remaining behavior is provisional; see the issue-1 research note below:
 
 | Mechanic | Implemented choice |
 | --- | --- |
@@ -13,13 +13,15 @@ Status: reference measurement plan, updated 2026-11-18. No fidelity approval or 
 | Horizontal | Immediate move on a direction change; first repeat after 16 further held ticks, then every 6 ticks; neutral/opposite directions reset charge; blocked attempts fully charge DAS and retry each active tick; charge saturates during entry delay until a successful repeat |
 | Input order | Derive press edges and DAS; consume entry delay/spawn and return if delayed; rotate; horizontal move; gravity/lock. Opposite rotation press edges cancel. Rotation uses press edges, not held repeats |
 | Gravity | Frames per cell for levels 0..29: `48,43,38,33,28,23,18,13,8,6,5,5,5,4,4,4,3,3,3,2,2,2,2,2,2,2,2,2,2,1`; levels above 29 use 1 |
-| Lock/drop | A failed downward attempt locks immediately; soft drop uses min(2,gravity) ticks and gives one point per successful downward cell while down is held; no hard drop or hold |
+| Lock/drop | A failed downward attempt locks immediately; soft drop uses min(2,gravity) ticks and gives one point per successful downward cell while Down is held and armed for this piece; every spawn disarms soft drop if Down is still held, and release rearms it; no hard drop or hold |
 | Delays | Constant 10 ticks after an ordinary lock, 20 after a clear; no separate clear animation timer; spawning consumes the final delay tick |
 | Randomizer | Wall-clock-independent xorshift32 (13,17,5); zero seed becomes 1; reject output values 0..3, then modulo 7; independent draws permit repeats; no bag or reference retry algorithm |
 | Score/level | Clears award 40/100/300/1200 times post-transition (level+1); start level clamps to 0..29; first transition uses `min(start*10+10,max(100,start*10-50))` lines, then every 10; total lines saturates at UINT32_MAX, preserving resumable states at the counter boundary |
 | Top-out | Any locked cell above visible row 0 ends play before clear processing; blocked spawn also ends play |
 
-State serialization includes board, active/next pieces, RNG, held inputs, DAS direction/timer, gravity/entry timers, tick, score, lines, levels and game-over flag. This is a distinct 268-byte gameplay codec; the M0 diagnostic codec remains separate. Version 3 changes transition/scoring, two-state geometry and charged blocked shifts; prior version 1/2 states and replays reject rather than silently playing under changed rules. The authored Practice clear fixture and implementation tests establish consistency with these choices only. Replay identity embeds their provisional description (see [replay contract](replay-v1.md)). Reference-trace execution and human handling approval remain outstanding.
+State serialization includes board, active/next pieces, RNG, held inputs, DAS direction/timer, gravity/entry timers, tick, score, lines, levels, game-over flag and per-piece soft-drop armed flag. This is a distinct 269-byte gameplay codec; the M0 diagnostic codec remains separate. Version 4 adds the release/repress gate; it retains version 3 transition/scoring, two-state geometry and charged blocked shifts. Prior version 1/2/3 states and replays reject rather than silently playing under changed rules. The authored Practice clear fixture and implementation tests establish consistency with these choices only. Replay identity embeds their provisional description (see [replay contract](replay-v1.md)). Reference-trace execution and human handling approval remain outstanding.
+
+Online Classic uses this same engine through the shared board adapter, including its RNG, entry delay, gravity and immediate lock behavior. It has one next piece, no hold, hard drop, ghost, kicks or garbage. Scores are displayed for comparison; the match result follows survival. The room manager selects a shared starting level from 0..29 for Classic or Fusion. This does not establish reference fidelity.
 
 ## Target and provenance
 

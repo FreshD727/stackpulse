@@ -1,8 +1,8 @@
 # Battle v1
 
-Modern/Fusion current implementation note: the spin-candidate v5 rules/state/replay contract supersedes conflicting M2/v1 behavior in this document. See [the current spin candidate resolution](../docs/issues/spin-candidate-resolution.md) for implemented defaults and compatibility. Classic/SPCR contracts remain unchanged. Proposed formats below are not all implemented.
+Current implementation: Classic uses provisional rules/state v4 and a 269-byte canonical state; shared Classic/Fusion/Modern boards use rules/state v6 and SPMR v6. Every newly spawned piece requires a fresh Down press after release to soft drop, including hold retrieval and Classic entry delay. Earlier gameplay states/recordings reject explicitly. The spin-candidate behavior in [the spin candidate resolution](../docs/issues/spin-candidate-resolution.md) remains in force. Proposed formats below are not all implemented.
 
-Status: M2 implements the project balance/order mechanics in `modern` and the headless `match` harness. Automated tests pass; human balance and M3 network validation remain pending. Applies to Modern/Fusion only; Classic Marathon has no garbage. No account, ranked or secure public service is implied.
+Status: M2 implements the project balance/order mechanics in `modern` and the headless `match` harness. Automated tests pass; human balance and M3 network validation remain pending. Applies to Modern/Fusion only; Classic Marathon and online Classic have no garbage; online Classic compares scores while determining the winner by survival. The room manager selects the shared starting level for Classic/Fusion. No account, ranked or secure public service is implied.
 
 | Clear | Base score | Base attack |
 | --- | ---: | ---: |
