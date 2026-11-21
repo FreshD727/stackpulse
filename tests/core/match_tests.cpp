@@ -187,3 +187,58 @@ TEST_CASE("Match full eight-player dedup capacity fits complete snapshot codec")
     REQUIRE(match::advance(restored, std::vector<std::uint32_t>(8, 0), nullptr, error));
     REQUIRE(restored == s);
 }
+
+TEST_CASE("Classic match start level disconnect forfeit and codec preserve authoritative state") {
+    auto s = match::initial_state({1, 2}, 17, modern::Preset::classic, 19);
+    REQUIRE(s.players[0].board.start_level == 19);
+    std::string error;
+    match::Events e;
+    REQUIRE(match::advance(s, {modern::down, modern::down}, &e, error));
+    REQUIRE(match::disconnect(s, 1));
+    REQUIRE(match::valid_state(s));
+    match::State restored;
+    REQUIRE(match::decode_state(match::canonical_bytes(s), restored));
+    REQUIRE(restored == s);
+    REQUIRE(match::reconnect(s, 1));
+    REQUIRE(match::advance(s, {0, 0}, &e, error));
+    REQUIRE(match::disconnect(s, 1));
+    s.players[0].deadline = s.tick;
+    REQUIRE(match::advance(s, {0, 0}, &e, error));
+    REQUIRE(s.result == match::Result::winner);
+    REQUIRE(s.players[0].board.classic_state->game_over);
+    REQUIRE(match::decode_state(match::canonical_bytes(s), restored));
+    REQUIRE(restored == s);
+    REQUIRE(s.scheduled.empty());
+    auto fusion = match::initial_state({1, 2}, 17, modern::Preset::fusion, 12);
+    REQUIRE(fusion.players[1].board.start_level == 12);
+    auto modern = match::initial_state({1, 2}, 17, modern::Preset::modern, 12);
+    REQUIRE(modern.players[1].board.start_level == 0);
+}
+
+TEST_CASE("Immediate reconnect treats disconnect input reset as a soft drop release") {
+    for (auto preset : {modern::Preset::classic, modern::Preset::fusion, modern::Preset::modern}) {
+        auto s = match::initial_state({1, 2}, 17, preset);
+        auto& board = s.players[0].board;
+        board.held = modern::down;
+        board.soft_drop_armed = false;
+        if (board.classic_state) {
+            board.classic_state->held = modern::down;
+            board.classic_state->soft_drop_armed = false;
+        }
+        REQUIRE(match::valid_state(s));
+        REQUIRE(match::disconnect(s, 1));
+        REQUIRE(board.held == 0);
+        REQUIRE(board.soft_drop_armed);
+        REQUIRE(match::valid_state(s));
+        match::State restored;
+        REQUIRE(match::decode_state(match::canonical_bytes(s), restored));
+        REQUIRE(restored == s);
+        REQUIRE(match::reconnect(s, 1));
+        std::string error;
+        match::Events e;
+        REQUIRE(match::advance(s, {modern::down, 0}, &e, error));
+        REQUIRE(match::advance(s, {modern::down, 0}, &e, error));
+        REQUIRE(e.boards[0].soft_dropped);
+        REQUIRE(s.players[0].board.score == 1);
+    }
+}

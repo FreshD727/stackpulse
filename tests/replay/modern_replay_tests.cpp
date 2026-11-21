@@ -162,7 +162,7 @@ TEST_CASE("Modern and Classic replay codecs reject each others containers") {
     REQUIRE_FALSE(replay::decode(bytes, classic_record, error));
 }
 
-TEST_CASE("Fusion version five replay retains Classic start level hold and complete stream state") {
+TEST_CASE("Fusion version six replay retains Classic start level hold and complete stream state") {
     auto s = modern::initial_state(49, modern::Preset::fusion, 19);
     REQUIRE(modern::step(s, modern::hold));
     REQUIRE(modern::step(s, modern::left));
@@ -172,7 +172,7 @@ TEST_CASE("Fusion version five replay retains Classic start level hold and compl
     std::vector<std::uint8_t> bytes;
     std::string error;
     REQUIRE(modern_replay::encode(r, bytes, error));
-    REQUIRE(bytes[4] == 5);
+    REQUIRE(bytes[4] == 6);
     modern_replay::Replay out;
     REQUIRE(modern_replay::decode(bytes, out, error));
     REQUIRE(out.initial == s);
@@ -193,7 +193,7 @@ TEST_CASE("Fusion version five replay retains Classic start level hold and compl
     broken[4] = 2;
     reseal(broken);
     REQUIRE_FALSE(modern_replay::decode(broken, out, error));
-    REQUIRE(error.find("older v1/v2/v3/v4 rejected") != std::string::npos);
+    REQUIRE(error.find("older v1/v2/v3/v4/v5 rejected") != std::string::npos);
     REQUIRE(out.initial == s);
     broken = bytes;
     broken[4] = 3;
@@ -216,4 +216,44 @@ TEST_CASE("Fusion version five replay retains Classic start level hold and compl
     reseal(broken);
     REQUIRE_FALSE(modern_replay::decode(broken, out, error));
     REQUIRE(out.initial == s);
+}
+
+TEST_CASE("Shared gameplay replays resume a disarmed per-piece soft drop gate in every mode") {
+    for (auto preset : {modern::Preset::classic, modern::Preset::fusion, modern::Preset::modern}) {
+        auto s = modern::initial_state(77, preset, 0);
+        modern::Events e;
+        if (s.classic_state) {
+            auto& c = *s.classic_state;
+            while (true) {
+                auto below = c.active;
+                ++below.y;
+                if (classic::collides(c, below))
+                    break;
+                c.active = below;
+            }
+            modern::project_classic(s);
+        } else
+            s.active = modern::ghost(s);
+        for (unsigned i = 0; i < 60 && !e.spawned; ++i)
+            REQUIRE(modern::step(s, modern::down, &e));
+        REQUIRE(e.spawned);
+        REQUIRE_FALSE(s.soft_drop_armed);
+        modern_replay::Replay r{s, {modern::down, modern::down, 0, modern::down, modern::down}};
+        std::string error;
+        std::vector<std::uint8_t> bytes;
+        REQUIRE(modern_replay::encode(r, bytes, error));
+        modern_replay::Replay restored;
+        REQUIRE(modern_replay::decode(bytes, restored, error));
+        REQUIRE(restored.initial == s);
+        modern::State a, b;
+        REQUIRE(modern_replay::verify(r, a, error));
+        REQUIRE(modern_replay::verify(restored, b, error));
+        REQUIRE(a == b);
+        REQUIRE(a.soft_drop_armed);
+        auto old = bytes;
+        old[4] = 5;
+        reseal(old);
+        REQUIRE_FALSE(modern_replay::decode(old, restored, error));
+        REQUIRE(error.find("v5 rejected") != std::string::npos);
+    }
 }

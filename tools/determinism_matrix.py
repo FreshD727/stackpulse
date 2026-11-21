@@ -35,7 +35,7 @@ def main():
         with path.open(newline='', encoding='utf-8') as stream:
             rows = list(csv.DictReader(stream))
         keys = {(r['preset'], int(r['seed'])) for r in rows}
-        expected = {(mode, seed) for mode in ('fusion', 'modern') for seed in range(1, args.seeds + 1)}
+        expected = {(mode, seed) for mode in ('fusion', 'modern', 'classic') for seed in range(1, args.seeds + 1)}
         if keys != expected or len(rows) != len(expected) or any(int(r['ticks']) != args.ticks for r in rows):
             raise SystemExit(f'incomplete matrix: {path}')
         canonical = sorted(rows, key=lambda row: (row['preset'], int(row['seed'])))

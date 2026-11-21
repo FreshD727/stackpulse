@@ -1,10 +1,12 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <optional>
+#include <stackpulse/classic.hpp>
 #include <vector>
 namespace stackpulse::modern {
-inline constexpr std::uint32_t rules_version = 5, action_mask = 255;
-enum class Preset : std::uint8_t { fusion, modern };
+inline constexpr std::uint32_t rules_version = 6, action_mask = 255;
+enum class Preset : std::uint8_t { fusion, modern, classic };
 enum Action : std::uint32_t {
     left = 1,
     right = 2,
@@ -34,6 +36,8 @@ struct Packet {
 };
 struct State {
     Preset preset{Preset::modern};
+    std::optional<classic::State> classic_state;
+    bool soft_drop_armed{true};
     std::uint64_t tick{}, score{}, lines{};
     std::array<std::uint8_t, 400> board{};
     Active active{};
@@ -88,6 +92,8 @@ struct SpinPosition {
 bool step(State&, std::uint32_t held, Events* events = nullptr);
 // Arrival is authoritative/practice input; duplicates are idempotent, max 256 pending.
 bool enqueue(State&, const Packet&);
+// Refresh the shared view after modifying the authoritative Classic state.
+void project_classic(State&) noexcept;
 [[nodiscard]] bool valid_state(const State&) noexcept;
 [[nodiscard]] std::uint32_t level(const State&) noexcept;
 [[nodiscard]] std::uint32_t gravity_interval(const State&) noexcept;

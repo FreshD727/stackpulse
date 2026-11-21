@@ -5,13 +5,14 @@
 namespace stackpulse::modern_replay {
 namespace {
 constexpr std::string_view rules =
-    "modern-fusion-spin-candidate-v5;codec=modern-state-v5;tick=60/1;board=10x40;"
+    "modern-fusion-classic-softdrop-v6;codec=modern-state-v6;tick=60/1;board=10x40;"
     "geometry=project-90-v1;rotation=SRS-project;fusion=classic-uniform,preview5,hold1,spawn-top-"
     "cell0-TJL2,"
     "classic-gravity,startlevel0-29,immediate,cw-ccw-first-success-grounded3corner-lock30,cap15;"
     "modern=bag7,preview5,spawn-2,das10,repeat3,lock30,cap15;fusion-das16-blockcharge-nexttick-"
     "reset10,opposites-neutral;"
-    "softdrop=one-cell-per-tick-no-backlog;harddrop=modern-only;allclear=2000*(level+1);"
+    "softdrop=per-piece-release-repress-including-hold,one-cell-per-tick-no-backlog;classic="
+    "authoritative-classic-v4-no-garbage;harddrop=modern-only;allclear=2000*(level+1);"
     "score=fusion-classic,spin1600-2400-3200*(level+1)|modern-battle-v1;"
     "battle=battle-v1;held-mask=255;hash=fnv1a64;checkpoints=600;overflow=reject";
 constexpr std::size_t max_bytes = 8 * 1024 * 1024;
@@ -79,7 +80,7 @@ bool encode(const Replay& r, std::vector<std::uint8_t>& bytes, std::string& erro
     if (state_bytes.size() > 262144)
         return fail(error, "initial state limit exceeded");
     std::vector<std::uint8_t> b{'S', 'P', 'M', 'R'};
-    put(b, 5, 2);
+    put(b, 6, 2);
     put(b, 0, 2);
     put(b, rules.size(), 4);
     put(b, state_bytes.size(), 4);
@@ -115,11 +116,11 @@ bool decode(const std::vector<std::uint8_t>& bytes, Replay& out, std::string& er
         if (checksum.get(4) != crc(bytes.data(), bytes.size() - 4))
             return fail(error, "replay CRC mismatch");
         Reader p{bytes};
-        if (p.get(4) != 0x524d5053u || p.get(2) != 5 || p.get(2) != 0)
+        if (p.get(4) != 0x524d5053u || p.get(2) != 6 || p.get(2) != 0)
             return fail(
                 error,
-                "incompatible Modern/Fusion replay format (requires spin-candidate v5; older "
-                "v1/v2/v3/v4 rejected)");
+                "incompatible Modern/Fusion replay format (requires per-piece softdrop v6; older "
+                "v1/v2/v3/v4/v5 rejected)");
         const auto rules_len = p.get(4), state_len = p.get(4), frames = p.get(4), hashes = p.get(4);
         if (rules_len > 4096 || state_len > 262144 || frames > max_frames ||
             hashes != frames / 600 + 1 + (frames % 600 != 0))

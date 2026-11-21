@@ -648,18 +648,18 @@ TEST_CASE("Fusion Classic clear values and all clear bonus scale with the level"
         REQUIRE(s.score == (preset == Preset::fusion ? 2040 : 2100));
     }
 }
-TEST_CASE("Version five snapshots retain Fusion start level hold and timers") {
+TEST_CASE("Version six snapshots retain Fusion start level hold and timers") {
     auto s = initial_state(49, Preset::fusion, 19);
     REQUIRE(step(s, hold));
     REQUIRE(step(s, left));
     REQUIRE(enqueue(s, {19, s.tick, s.tick + 30, 2, 5, 8}));
     auto bytes = canonical_bytes(s);
-    REQUIRE(bytes[0] == 5);
+    REQUIRE(bytes[0] == 6);
     State restored;
     REQUIRE(decode_state(bytes, restored));
     REQUIRE(restored == s);
     REQUIRE(restored.start_level == 19);
-    for (auto older : {1u, 2u, 3u, 4u}) {
+    for (auto older : {1u, 2u, 3u, 4u, 5u}) {
         bytes[0] = static_cast<std::uint8_t>(older);
         REQUIRE_FALSE(decode_state(bytes, restored));
         REQUIRE(restored == s);
@@ -1122,4 +1122,84 @@ TEST_CASE("CASE0002 current three corner pose never grants Fusion delay by itsel
                 REQUIRE(s.lock_elapsed == 1);
             }
         }
+}
+
+TEST_CASE("Fusion and Modern soft drop gate survives lock hold and state restoration") {
+    for (auto preset : {Preset::fusion, Preset::modern}) {
+        auto s = initial_state(77, preset);
+        s.active = ghost(s);
+        Events e;
+        for (unsigned i = 0; i < 32 && !e.spawned; ++i)
+            REQUIRE(step(s, down, &e));
+        REQUIRE(e.spawned);
+        REQUIRE_FALSE(s.soft_drop_armed);
+        const auto y = s.active.y;
+        for (unsigned i = 0; i < 4; ++i) {
+            REQUIRE(step(s, down, &e));
+            REQUIRE_FALSE(e.soft_dropped);
+        }
+        REQUIRE(s.active.y == y);
+        State restored;
+        REQUIRE(decode_state(canonical_bytes(s), restored));
+        REQUIRE(restored == s);
+        REQUIRE(step(s, 0));
+        REQUIRE(s.soft_drop_armed);
+        REQUIRE(step(s, down, &e));
+        REQUIRE(e.soft_dropped);
+        REQUIRE(step(s, down | hold, &e));
+        REQUIRE(e.held);
+        REQUIRE_FALSE(s.soft_drop_armed);
+        REQUIRE(step(s, down, &e));
+        REQUIRE_FALSE(e.soft_dropped);
+        REQUIRE(step(s, 0));
+        REQUIRE(step(s, down, &e));
+        REQUIRE(e.soft_dropped);
+        // A swap with an already occupied hold slot is another newly spawned piece.
+        s.hold_used = false;
+        REQUIRE(step(s, hold | down, &e));
+        REQUIRE(e.held);
+        REQUIRE_FALSE(s.soft_drop_armed);
+    }
+}
+TEST_CASE(
+    "Classic shared view runs the exact authoritative engine and rejects inconsistent projection") {
+    for (unsigned seed = 1; seed < 30; ++seed) {
+        auto s = initial_state(seed, Preset::classic, 9);
+        auto original = stackpulse::classic::initial_state(seed, 9);
+        REQUIRE(valid_state(s));
+        for (unsigned tick = 0; tick < 400; ++tick) {
+            const auto held = tick % 31 < 15 ? down : tick % 7 == 0 ? clockwise : 0u;
+            stackpulse::classic::Events ce;
+            Events e;
+            REQUIRE(stackpulse::classic::step(original, held, &ce));
+            REQUIRE(step(s, held, &e));
+            REQUIRE(*s.classic_state == original);
+            REQUIRE(s.score == original.score);
+            REQUIRE(s.lines == original.lines);
+            REQUIRE(e.locked == ce.locked);
+            REQUIRE(e.spawned == ce.spawned);
+            REQUIRE(e.soft_dropped == ce.soft_dropped);
+            REQUIRE(e.attack == 0);
+            auto actual = cells(s.active);
+            auto expected = stackpulse::classic::cells(original.active);
+            std::array<std::pair<int, int>, 4> a{}, b{};
+            for (unsigned i = 0; i < 4; ++i) {
+                a[i] = {actual[i].x, actual[i].y};
+                b[i] = {expected[i].x, expected[i].y};
+            }
+            std::sort(a.begin(), a.end());
+            std::sort(b.begin(), b.end());
+            REQUIRE(a == b);
+            State restored;
+            REQUIRE(decode_state(canonical_bytes(s), restored));
+            REQUIRE(restored == s);
+        }
+        auto broken = s;
+        ++broken.score;
+        REQUIRE_FALSE(valid_state(broken));
+        State unchanged = s;
+        REQUIRE_FALSE(decode_state(canonical_bytes(broken), unchanged));
+        REQUIRE(unchanged == s);
+        REQUIRE_FALSE(enqueue(s, {1, 0, 30, 2, 1, 4}));
+    }
 }

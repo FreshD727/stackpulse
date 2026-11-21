@@ -98,6 +98,7 @@ void spawn(State& s, Piece p) {
             occupied_cells.begin(), occupied_cells.end(), [](auto a, auto b) { return a.y < b.y; });
         s.active.y = -top->y;
     }
+    s.soft_drop_armed = !(s.held & down);
     s.gravity_timer = 0;
     s.lock_elapsed = 0;
     s.lock_resets = 0;
@@ -265,6 +266,8 @@ std::array<Cell, 5> kick_offsets(Piece p, std::uint8_t from, std::uint8_t to) no
     return K{{{0, 0}, {d, 0}, {d, -1}, {0, 2}, {d, 2}}};
 }
 bool rotate(State& s, bool cw) noexcept {
+    if (s.preset == Preset::classic)
+        return false;
     auto a = s.active;
     a.rotation = static_cast<std::uint8_t>((a.rotation + (cw ? 1 : 3)) % 4);
     const auto kicks = kick_offsets(a.piece, s.active.rotation, a.rotation);
@@ -282,13 +285,14 @@ bool rotate(State& s, bool cw) noexcept {
     return false;
 }
 std::uint8_t spawn_rotation(Piece piece, Preset preset) noexcept {
-    return preset == Preset::fusion && (piece == Piece::T || piece == Piece::J || piece == Piece::L)
+    return (preset == Preset::fusion || preset == Preset::classic) &&
+                   (piece == Piece::T || piece == Piece::J || piece == Piece::L)
                ? 2
                : 0;
 }
 SpinPossibility spin_possibility(const State& s) noexcept {
     SpinPossibility result;
-    if (s.active.piece != Piece::T || collides(s, s.active))
+    if (s.preset == Preset::classic || s.active.piece != Piece::T || collides(s, s.active))
         return result;
     const auto spin_pose = [&](const Active& a) {
         auto below = a;
@@ -337,9 +341,57 @@ std::vector<SpinPosition> enumerate_spin_positions(const State& s, std::uint8_t 
         }
     return positions;
 }
+void project_classic(State& s) noexcept {
+    if (!s.classic_state)
+        return;
+    const auto& c = *s.classic_state;
+    constexpr std::array<Piece, 7> mapping{
+        Piece::I, Piece::O, Piece::T, Piece::S, Piece::Z, Piece::J, Piece::L};
+    s.preset = Preset::classic;
+    s.tick = c.tick;
+    s.score = c.score;
+    s.lines = c.lines;
+    s.start_level = c.start_level;
+    s.rng = c.rng;
+    s.held = (s.held & ~classic::action_mask) | c.held;
+    s.soft_drop_armed = c.soft_drop_armed;
+    s.board.fill(0);
+    for (std::size_t i = 0; i < c.board.size(); ++i)
+        if (c.board[i])
+            s.board[i + 200] = static_cast<std::uint8_t>(mapping[c.board[i] - 1]) + 1;
+    s.active = {
+        mapping[static_cast<unsigned>(c.active.piece)], c.active.rotation, c.active.x, c.active.y};
+    if ((c.active.piece == classic::Piece::I || c.active.piece == classic::Piece::S ||
+         c.active.piece == classic::Piece::Z) &&
+        c.active.rotation == 0)
+        ++s.active.y;
+    s.next.fill(mapping[static_cast<unsigned>(c.next)]);
+    s.bag = {Piece::I, Piece::J, Piece::L, Piece::O, Piece::S, Piece::T, Piece::Z};
+    s.bag_cursor = 7;
+    s.held_piece = Piece::I;
+    s.has_hold = false;
+    s.hold_used = false;
+    s.gravity_timer = c.gravity_timer;
+    s.das_timer = c.das_timer;
+    s.direction = c.direction;
+    s.lock_elapsed = 0;
+    s.combo = -1;
+    s.lock_resets = 0;
+    s.last_kick = 0;
+    s.last_rotation = false;
+    s.back_to_back = false;
+    s.game_over = c.game_over;
+    s.incoming.clear();
+    s.received_ids.clear();
+}
 State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level) {
     State s;
     s.preset = preset;
+    if (preset == Preset::classic) {
+        s.classic_state = classic::initial_state(seed, start_level);
+        project_classic(s);
+        return s;
+    }
     s.start_level = preset == Preset::fusion ? std::min(start_level, 29u) : 0;
     s.rng = preset == Preset::fusion ? (seed ? seed : 1) : normalize(seed);
     s.garbage_rng = normalize(seed ^ 0xa5a5a5a5u);
@@ -353,7 +405,7 @@ State initial_state(std::uint32_t seed, Preset preset, std::uint32_t start_level
 }
 Active ghost(const State& s) noexcept {
     auto a = s.active;
-    if (collides(s, a))
+    if (s.preset == Preset::classic || collides(s, a))
         return a;
     for (;;) {
         auto b = a;
@@ -364,6 +416,8 @@ Active ghost(const State& s) noexcept {
     }
 }
 std::uint32_t level(const State& s) noexcept {
+    if (s.classic_state)
+        return s.classic_state->level;
     if (s.preset == Preset::fusion)
         return classic::level_for_lines(s.start_level,
                                         static_cast<std::uint32_t>(std::min<std::uint64_t>(
@@ -371,13 +425,15 @@ std::uint32_t level(const State& s) noexcept {
     return static_cast<std::uint32_t>(std::min<std::uint64_t>(20, s.lines / 10));
 }
 std::uint32_t gravity_interval(const State& s) noexcept {
-    if (s.preset == Preset::fusion)
+    if (s.preset == Preset::classic || s.preset == Preset::fusion)
         return classic::gravity_frames(level(s));
     constexpr std::array<unsigned, 21> gravity{60, 48, 40, 32, 26, 20, 16, 12, 10, 8, 6,
                                                5,  4,  3,  2,  1,  1,  1,  1,  1,  1};
     return gravity[level(s)];
 }
 bool enqueue(State& s, const Packet& p) {
+    if (s.preset == Preset::classic)
+        return false;
     if (!p.id || !p.rows || p.rows > 1024 || p.hole >= 10 || p.eligible < p.creation)
         return false;
     if (std::binary_search(s.received_ids.begin(), s.received_ids.end(), p.id))
@@ -399,6 +455,26 @@ bool step(State& s, std::uint32_t held, Events* output) {
         s.das_timer == std::numeric_limits<std::uint64_t>::max())
         return false;
     Events e;
+    if (s.preset == Preset::classic) {
+        classic::Events ce;
+        const auto old_score = s.score;
+        if (!classic::step(*s.classic_state, held & classic::action_mask, &ce))
+            return false;
+        s.held = held;
+        project_classic(s);
+        e.moved = ce.moved;
+        e.shifted = ce.shifted;
+        e.soft_dropped = ce.soft_dropped;
+        e.rotated = ce.rotated;
+        e.locked = ce.locked;
+        e.spawned = ce.spawned;
+        e.topped_out = ce.topped_out;
+        e.cleared = ce.cleared;
+        e.score_delta = s.score - old_score;
+        if (output)
+            *output = e;
+        return true;
+    }
     if (s.game_over) {
         s.held = held;
         ++s.tick;
@@ -409,6 +485,8 @@ bool step(State& s, std::uint32_t held, Events* output) {
     const auto pressed = held & ~s.held;
     const auto old_score = s.score;
     s.held = held;
+    if (!(held & down))
+        s.soft_drop_armed = true;
     if ((pressed & hold) && !s.hold_used) {
         const auto old = s.active.piece;
         const auto p = s.has_hold ? s.held_piece : take(s);
@@ -490,8 +568,9 @@ bool step(State& s, std::uint32_t held, Events* output) {
         lock(s, e);
     } else {
         bool blocked_drop = false;
-        const auto interval =
-            (held & down) ? std::min(2u, gravity_interval(s)) : gravity_interval(s);
+        const auto interval = ((held & down) && s.soft_drop_armed)
+                                  ? std::min(2u, gravity_interval(s))
+                                  : gravity_interval(s);
         // Changing cadence must never spend old slow-gravity time as multiple soft drops.
         s.gravity_timer = std::min<std::uint64_t>(s.gravity_timer, interval - 1);
         ++s.gravity_timer;
@@ -505,7 +584,7 @@ bool step(State& s, std::uint32_t held, Events* output) {
             } else {
                 s.active = a;
                 e.moved = true;
-                if (held & down) {
+                if ((held & down) && s.soft_drop_armed) {
                     add(s.score, 1);
                     e.soft_dropped = true;
                 }

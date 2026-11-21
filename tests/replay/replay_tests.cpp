@@ -33,7 +33,7 @@ TEST_CASE("Classic replay roundtrip from marathon and practice complete state") 
         REQUIRE(bytes[1] == 'P');
         REQUIRE(bytes[2] == 'C');
         REQUIRE(bytes[3] == 'R');
-        REQUIRE(u32(bytes, 12) == 268);
+        REQUIRE(u32(bytes, 12) == 269);
         replay::Replay restored;
         REQUIRE(replay::decode(bytes, restored, error));
         REQUIRE(restored.initial == r.initial);
@@ -118,7 +118,7 @@ TEST_CASE("Classic replay rejects previous provisional rules with an explanatory
     std::vector<std::uint8_t> bytes;
     REQUIRE(replay::encode(r, bytes, error));
     std::string previous(reinterpret_cast<const char*>(bytes.data() + 24), u32(bytes, 8));
-    previous.replace(previous.find("v3;"), 3, "v2;");
+    previous.replace(previous.find("v4;"), 3, "v2;");
     const std::string spawn_rule = "spawn-rotation=I0,O0,T2,S0,Z0,J2,L2;";
     previous.erase(previous.find(spawn_rule), spawn_rule.size());
     const auto old_length = u32(bytes, 8);
@@ -186,4 +186,27 @@ TEST_CASE("Classic replay preserves a topout that completes a visible row") {
     classic::State roundtrip;
     REQUIRE(replay::verify(restored, roundtrip, error));
     REQUIRE(roundtrip == final);
+}
+
+TEST_CASE("Classic replay resumes a mid-piece disarmed soft drop gate") {
+    auto s = classic::initial_state(77);
+    s.held = classic::down;
+    s.soft_drop_armed = false;
+    replay::Replay r{s, {classic::down, classic::down, 0, classic::down, classic::down}};
+    std::string error;
+    std::vector<std::uint8_t> bytes;
+    REQUIRE(replay::encode(r, bytes, error));
+    replay::Replay restored;
+    REQUIRE(replay::decode(bytes, restored, error));
+    REQUIRE(restored.initial == s);
+    classic::State a, b;
+    REQUIRE(replay::verify(r, a, error));
+    REQUIRE(replay::verify(restored, b, error));
+    REQUIRE(a == b);
+    REQUIRE(a.soft_drop_armed);
+    auto old = classic::canonical_bytes(s);
+    old[0] = 3;
+    classic::State unchanged = s;
+    REQUIRE_FALSE(classic::decode_state(old, unchanged));
+    REQUIRE(unchanged == s);
 }

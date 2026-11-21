@@ -44,8 +44,9 @@ int main(int argc, char** argv) {
     std::ostream& out = output.empty() ? std::cout : file;
     out << "trace_version,rules_version,preset,seed,ticks,episodes,locks,checkpoints,state_hash,"
            "trace_hash\n";
-    for (const auto preset :
-         {stackpulse::modern::Preset::fusion, stackpulse::modern::Preset::modern}) {
+    for (const auto preset : {stackpulse::modern::Preset::fusion,
+                              stackpulse::modern::Preset::modern,
+                              stackpulse::modern::Preset::classic}) {
         for (std::uint32_t index = 0; index < seeds; ++index) {
             const std::uint32_t seed = index + 1;
             auto state = stackpulse::modern::initial_state(seed, preset);
@@ -100,9 +101,11 @@ int main(int argc, char** argv) {
                 }
             }
             out << "1," << stackpulse::modern::rules_version << ','
-                << (preset == stackpulse::modern::Preset::fusion ? "fusion" : "modern") << ','
-                << seed << ',' << ticks << ',' << episodes << ',' << locks << ',' << checkpoints
-                << ',' << std::hex << std::setfill('0') << std::setw(16)
+                << (preset == stackpulse::modern::Preset::fusion    ? "fusion"
+                    : preset == stackpulse::modern::Preset::classic ? "classic"
+                                                                    : "modern")
+                << ',' << seed << ',' << ticks << ',' << episodes << ',' << locks << ','
+                << checkpoints << ',' << std::hex << std::setfill('0') << std::setw(16)
                 << stackpulse::modern::state_hash(state) << ',' << std::setw(16) << digest
                 << std::dec << '\n';
         }

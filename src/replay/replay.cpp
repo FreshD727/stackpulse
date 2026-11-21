@@ -5,7 +5,7 @@
 namespace stackpulse::replay {
 namespace {
 constexpr std::string_view rules =
-    "classic-provisional-v3;tick=60/"
+    "classic-provisional-v4;tick=60/"
     "1;board=10x20;spawn=3,-1;spawn-rotation=I0,O0,T2,S0,Z0,J2,L2;matrix=I4,SZ3-two-state-"
     "horizontal-down1,O-fixed,other3;rotation=no-kicks;random=xorshift32-reject7;seed0=1;gravity="
     "48,43,38,33,28,23,18,13,8,6,5,5,5,4,4,4,3,3,3,2,2,2,2,2,2,2,2,2,2,1;das=16,6,blocked-charge16,"
@@ -13,7 +13,7 @@ constexpr std::string_view rules =
     "40,100,300,1200;lines=saturate-u32;level=initial-min(start*10+10,max(100,start*10-50))-then10;"
     "clear-score=post-transition;topout=above0-or-blocked-spawn;held=left1,right2,down4,cw8,ccw16;"
     "order=edges,das,entry,rotate,horizontal,gravity;random-reject=0..3;start-clamp=29;rotate="
-    "press-edge-opposites-cancel";
+    "press-edge-opposites-cancel;softdrop=per-piece-release-repress-including-entry";
 constexpr std::size_t max_bytes = 8 * 1024 * 1024;
 void put(std::vector<std::uint8_t>& b, std::uint64_t v, unsigned n) {
     for (unsigned i = 0; i < n; ++i)
@@ -109,7 +109,9 @@ bool decode(const std::vector<std::uint8_t>& bytes, Replay& out, std::string& er
             return fail(error, "replay CRC mismatch");
         Reader p{bytes};
         if (p.get(4) != 0x52435053u || p.get(2) != 1 || p.get(2) != 0)
-            return fail(error, "unsupported Classic replay format");
+            return fail(error,
+                        "incompatible Classic replay format (requires per-piece softdrop v4; older "
+                        "versions rejected)");
         const auto rules_len = p.get(4), state_len = p.get(4), frames = p.get(4), hashes = p.get(4);
         if (rules_len > 4096 || state_len > 4096 || frames > max_frames ||
             hashes != frames / 600 + 1 + (frames % 600 != 0))

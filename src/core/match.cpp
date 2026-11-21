@@ -59,12 +59,13 @@ struct Reader {
 } // namespace
 State initial_state(const std::vector<std::uint16_t>& ids,
                     std::uint32_t seed,
-                    modern::Preset preset) {
+                    modern::Preset preset,
+                    std::uint32_t start_level) {
     State s;
     for (auto id : ids) {
         Player p;
         p.id = id;
-        p.board = modern::initial_state(seed ^ id, preset);
+        p.board = modern::initial_state(seed ^ id, preset, start_level);
         s.players.push_back(p);
     }
     if (!valid_state(s))
@@ -80,7 +81,9 @@ bool valid_state(const State& s) noexcept {
     unsigned alive = 0;
     std::uint16_t previous = 0;
     for (const auto& p : s.players) {
-        if (!p.id || p.id <= previous || !modern::valid_state(p.board) ||
+        if (p.board.preset != s.players.front().board.preset ||
+            p.board.start_level != s.players.front().board.start_level || !p.id ||
+            p.id <= previous || !modern::valid_state(p.board) ||
             (!p.placement && p.board.tick != s.tick) || p.board.tick > s.tick ||
             p.placement > s.players.size() || p.target == p.id ||
             (p.placement && !p.board.game_over) || (!p.placement && p.board.game_over) ||
@@ -98,6 +101,8 @@ bool valid_state(const State& s) noexcept {
     if (s.result == Result::winner && alive != 1)
         return false;
     if (s.result == Result::draw && alive != 0)
+        return false;
+    if (s.players.front().board.preset == modern::Preset::classic && !s.scheduled.empty())
         return false;
     std::uint64_t prior = 0;
     for (const auto& a : s.scheduled) {
@@ -163,6 +168,8 @@ bool advance(State& state,
         auto& p = s.players[i];
         p.placement = static_cast<std::uint8_t>(survivors ? survivors + 1 : 1);
         p.board.game_over = true;
+        if (p.board.classic_state)
+            p.board.classic_state->game_over = true;
         out.eliminated.push_back(p.id);
     }
     for (std::size_t i = 0; i < s.players.size(); ++i) {
@@ -212,6 +219,11 @@ bool disconnect(State& s, std::uint16_t id) {
         p->disconnected = true;
         p->deadline = s.tick + 600;
         p->board.held = 0;
+        p->board.soft_drop_armed = true;
+        if (p->board.classic_state) {
+            p->board.classic_state->held = 0;
+            p->board.classic_state->soft_drop_armed = true;
+        }
     }
     return true;
 }

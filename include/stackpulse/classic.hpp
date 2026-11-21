@@ -4,7 +4,7 @@
 #include <vector>
 
 namespace stackpulse::classic {
-inline constexpr std::uint32_t rules_version = 3;
+inline constexpr std::uint32_t rules_version = 4;
 inline constexpr std::uint32_t tick_numerator = 60, tick_denominator = 1;
 enum Action : std::uint32_t { left = 1, right = 2, down = 4, clockwise = 8, counterclockwise = 16 };
 inline constexpr std::uint32_t action_mask = 31;
@@ -37,6 +37,7 @@ struct State {
     std::uint32_t gravity_timer{}, das_timer{}, entry_timer{};
     std::int32_t direction{};
     bool game_over{};
+    bool soft_drop_armed{true};
     bool operator==(const State&) const = default;
 };
 // moved includes gravity; shifted/soft_dropped identify successful player movement.

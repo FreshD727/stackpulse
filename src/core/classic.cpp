@@ -29,6 +29,7 @@ void spawn(State& s, Events& e) noexcept {
     s.active = {s.next, spawn_rotation(s.next), 3, -1};
     s.next = draw(s.rng);
     s.gravity_timer = 0;
+    s.soft_drop_armed = (s.held & down) == 0;
     e.spawned = true;
     if (collides(s, s.active)) {
         s.game_over = true;
@@ -160,6 +161,8 @@ bool step(State& s, std::uint32_t held, Events* output) noexcept {
     Events e;
     const auto pressed = held & ~s.held;
     s.held = held;
+    if (!(held & down))
+        s.soft_drop_armed = true;
     ++s.tick;
     if (s.game_over) {
         if (output)
@@ -209,8 +212,9 @@ bool step(State& s, std::uint32_t held, Events* output) noexcept {
         } else
             s.das_timer = 16; // A blocked shift charges DAS; retry on the next active tick.
     }
-    const auto interval =
-        (held & down) != 0 ? std::min(2u, gravity_frames(s.level)) : gravity_frames(s.level);
+    const auto interval = ((held & down) != 0 && s.soft_drop_armed)
+                              ? std::min(2u, gravity_frames(s.level))
+                              : gravity_frames(s.level);
     ++s.gravity_timer;
     if (s.gravity_timer >= interval) {
         s.gravity_timer = 0;
@@ -221,7 +225,7 @@ bool step(State& s, std::uint32_t held, Events* output) noexcept {
         else {
             s.active = candidate;
             e.moved = true;
-            if ((held & down) != 0) {
+            if ((held & down) != 0 && s.soft_drop_armed) {
                 ++s.score;
                 e.soft_dropped = true;
             }
@@ -258,10 +262,11 @@ std::vector<std::uint8_t> canonical_bytes(const State& s) {
     put(s.entry_timer, 4);
     put(static_cast<std::uint32_t>(s.direction), 4);
     put(s.game_over ? 1 : 0, 1);
+    put(s.soft_drop_armed ? 1 : 0, 1);
     return bytes;
 }
 bool decode_state(const std::vector<std::uint8_t>& b, State& out) noexcept {
-    if (b.size() != 268)
+    if (b.size() != 269)
         return false;
     std::size_t p = 0;
     const auto get = [&](unsigned count) {
@@ -295,6 +300,10 @@ bool decode_state(const std::vector<std::uint8_t>& b, State& out) noexcept {
     if (over > 1)
         return false;
     s.game_over = over != 0;
+    const auto armed = get(1);
+    if (armed > 1)
+        return false;
+    s.soft_drop_armed = armed != 0;
     if (!valid_state(s))
         return false;
     out = s;
@@ -328,6 +337,7 @@ std::uint64_t state_hash(const State& s) noexcept {
     put(s.entry_timer, 4);
     put(static_cast<std::uint32_t>(s.direction), 4);
     put(s.game_over ? 1 : 0, 1);
+    put(s.soft_drop_armed ? 1 : 0, 1);
     return hash;
 }
 State clear_fixture(std::uint32_t seed) noexcept {

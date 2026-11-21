@@ -34,7 +34,8 @@ struct Events {
 // IDs must be nonzero, strictly ascending, count 2..8. Invalid creation throws invalid_argument.
 State initial_state(const std::vector<std::uint16_t>& ids,
                     std::uint32_t seed,
-                    modern::Preset preset = modern::Preset::modern);
+                    modern::Preset preset = modern::Preset::modern,
+                    std::uint32_t start_level = 0);
 bool valid_state(const State&) noexcept;
 // One held mask per roster player. Invalid/capacity/overflow errors preserve state and events.
 bool advance(State&, const std::vector<std::uint32_t>& held, Events*, std::string& error);

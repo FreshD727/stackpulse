@@ -222,7 +222,7 @@ TEST_CASE("Classic complete state codec restores hidden timers") {
     s.das_timer = 11;
     s.gravity_timer = 1;
     auto bytes = canonical_bytes(s);
-    REQUIRE(bytes.size() == 268);
+    REQUIRE(bytes.size() == 269);
     State restored;
     REQUIRE(decode_state(bytes, restored));
     REQUIRE(restored == s);
@@ -377,4 +377,51 @@ TEST_CASE("Classic fully charged entry DAS is available on first active tick") {
     REQUIRE(e.shifted);
     REQUIRE(s.active.x == 2);
     REQUIRE(s.das_timer == 10);
+}
+
+TEST_CASE("Classic soft drop requires release and press on every spawned piece") {
+    auto s = initial_state(77);
+    while (true) {
+        auto below = s.active;
+        ++below.y;
+        if (collides(s, below))
+            break;
+        s.active = below;
+    }
+    Events e;
+    REQUIRE(step(s, down));
+    REQUIRE(step(s, down, &e));
+    REQUIRE(e.locked);
+    while (s.entry_timer)
+        REQUIRE(step(s, down));
+    REQUIRE_FALSE(s.soft_drop_armed);
+    const auto y = s.active.y;
+    for (unsigned i = 0; i < 4; ++i) {
+        REQUIRE(step(s, down, &e));
+        REQUIRE_FALSE(e.soft_dropped);
+    }
+    REQUIRE(s.active.y == y);
+    State restored;
+    REQUIRE(decode_state(canonical_bytes(s), restored));
+    REQUIRE(restored == s);
+    REQUIRE(step(s, 0));
+    REQUIRE(s.soft_drop_armed);
+    REQUIRE(step(s, down, &e));
+    REQUIRE(e.soft_dropped);
+    auto entry = initial_state(99);
+    entry.entry_timer = 2;
+    entry.held = down;
+    entry.soft_drop_armed = false;
+    REQUIRE(step(entry, 0));
+    REQUIRE(step(entry, 0, &e));
+    REQUIRE(e.spawned);
+    REQUIRE(entry.soft_drop_armed);
+    REQUIRE(step(entry, down));
+    REQUIRE(step(entry, down, &e));
+    REQUIRE(e.soft_dropped);
+    entry.entry_timer = 2;
+    REQUIRE(step(entry, 0));
+    REQUIRE(step(entry, down, &e));
+    REQUIRE(e.spawned);
+    REQUIRE_FALSE(entry.soft_drop_armed);
 }

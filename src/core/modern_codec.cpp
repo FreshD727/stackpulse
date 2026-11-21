@@ -4,6 +4,17 @@
 #include <stackpulse/modern.hpp>
 namespace stackpulse::modern {
 bool valid_state(const State& s) noexcept {
+    if (s.preset == Preset::classic) {
+        if (!s.classic_state || !classic::valid_state(*s.classic_state) ||
+            (s.held & ~action_mask) || !s.target_rng || !s.garbage_rng || !s.incoming.empty() ||
+            !s.received_ids.empty())
+            return false;
+        auto expected = s;
+        project_classic(expected);
+        return expected == s;
+    }
+    if (s.classic_state)
+        return false;
     if (s.start_level > 29 || (s.preset == Preset::modern && s.start_level != 0) ||
         static_cast<unsigned>(s.preset) > 1 || static_cast<unsigned>(s.active.piece) > 6 ||
         s.active.rotation > 3 || s.active.x < -4 || s.active.x > 10 || s.active.y < -20 ||
@@ -123,6 +134,13 @@ std::vector<std::uint8_t> canonical_bytes(const State& s) {
     w.u(s.last_rotation, 1);
     w.u(s.back_to_back, 1);
     w.u(s.game_over, 1);
+    w.u(s.soft_drop_armed, 1);
+    w.u(s.classic_state.has_value(), 1);
+    if (s.classic_state) {
+        const auto bytes = classic::canonical_bytes(*s.classic_state);
+        w.u(bytes.size(), 4);
+        w.b.insert(w.b.end(), bytes.begin(), bytes.end());
+    }
     w.u(s.incoming.size(), 4);
     for (auto p : s.incoming) {
         w.u(p.id, 8);
@@ -177,6 +195,19 @@ bool decode_state(const std::vector<std::uint8_t>& b, State& out) {
     s.last_rotation = r.flag();
     s.back_to_back = r.flag();
     s.game_over = r.flag();
+    s.soft_drop_armed = r.flag();
+    if (r.flag()) {
+        const auto size = r.u(4);
+        if (!r.ok || size > b.size() - r.pos)
+            return false;
+        std::vector<std::uint8_t> bytes(b.begin() + static_cast<std::ptrdiff_t>(r.pos),
+                                        b.begin() + static_cast<std::ptrdiff_t>(r.pos + size));
+        r.pos += static_cast<std::size_t>(size);
+        classic::State c;
+        if (!classic::decode_state(bytes, c))
+            return false;
+        s.classic_state = c;
+    }
     const auto n = r.u(4);
     if (n > 256)
         return false;
