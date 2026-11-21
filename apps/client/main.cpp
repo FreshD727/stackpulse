@@ -1,5 +1,6 @@
 #include "audio.hpp"
 #include "replay_library.hpp"
+#include "replay_seek.hpp"
 #ifdef STACKPULSE_NETWORK
 #include "online.hpp"
 #endif
@@ -336,6 +337,7 @@ int run_online(SDL_Renderer* renderer,
     net::RoomOptions draft;
     draft.preset = preset;
     int lobby_row = 0;
+    std::vector<net::RoomInfo> previous_directory;
     int error_row = 0;
     std::string password;
     client::RoomSelection room_selection;
@@ -420,6 +422,22 @@ int run_online(SDL_Renderer* renderer,
                             smoke_lobby_stage == "results";
     if (!smoke_lobby_stage.empty() && !smoke_room)
         smoke_view.phase = net::Phase::browsing;
+    if (smoke_lobby_stage == "browse") {
+        net::RoomInfo open_room;
+        open_room.code = "OPEN";
+        open_room.name = "Evening lobby";
+        open_room.players = 2;
+        open_room.capacity = 8;
+        net::RoomInfo locked_room = open_room;
+        locked_room.code = "LOCK";
+        locked_room.name = "Friends lobby";
+        locked_room.password_required = true;
+        locked_room.preset = modern::Preset::classic;
+        smoke_view.rooms = {open_room, locked_room};
+        previous_directory = smoke_view.rooms;
+        lobby_page = LobbyPage::browse;
+        lobby_row = static_cast<int>(smoke_view.rooms.size()) + 1;
+    }
     if (smoke_room) {
         smoke_view.phase = smoke_lobby_stage == "results"     ? net::Phase::results
                            : smoke_lobby_stage == "countdown" ? net::Phase::countdown
@@ -455,6 +473,9 @@ int run_online(SDL_Renderer* renderer,
                                                       : connection.view();
         const bool connection_failed =
             view.phase == net::Phase::error || view.phase == net::Phase::disconnected;
+        if (view.phase == net::Phase::browsing && lobby_page == LobbyPage::browse)
+            lobby_row = client::directory_selection(lobby_row, previous_directory, view.rooms);
+        previous_directory = view.rooms;
         const auto room_actions = client::room_actions(view);
         if (room_phase != view.phase || room_row >= static_cast<int>(room_actions.size()))
             room_row = 0;
@@ -592,7 +613,7 @@ int run_online(SDL_Renderer* renderer,
                                : lobby_page == LobbyPage::create ? 7
                                : lobby_page == LobbyPage::password
                                    ? 2
-                                   : static_cast<int>(view.rooms.size()) + 1;
+                                   : static_cast<int>(view.rooms.size()) + 2;
                     if (key(SDL_SCANCODE_UP, SDL_GAMEPAD_BUTTON_DPAD_UP))
                         lobby_row = (lobby_row + rows - 1) % rows;
                     else if (key(SDL_SCANCODE_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN))
@@ -633,7 +654,14 @@ int run_online(SDL_Renderer* renderer,
                                 lobby_row = 0;
                             }
                         } else if (lobby_page == LobbyPage::browse) {
-                            if (lobby_row >= static_cast<int>(view.rooms.size())) {
+                            const auto directory_action =
+                                client::directory_action(lobby_row, view.rooms.size());
+                            if (directory_action == client::DirectoryAction::back) {
+                                lobby_page = LobbyPage::choice;
+                                lobby_row = 0;
+                                continue;
+                            }
+                            if (directory_action == client::DirectoryAction::refresh) {
                                 connection.list_rooms();
                                 continue;
                             }
@@ -1149,6 +1177,7 @@ int run_online(SDL_Renderer* renderer,
                                    (room.state == net::Phase::waiting ? " OPEN" : " IN MATCH") +
                                    (room.password_required ? " [LOCK]" : ""));
                 rows.push_back("REFRESH");
+                rows.push_back("BACK");
             }
             text(renderer, 32, 60, title, mint);
             int first = std::max(0, lobby_row - 5);
@@ -1264,6 +1293,8 @@ int main(int argc, char** argv) {
     std::filesystem::path data_directory, verify_path, capture_path;
     bool smoke_spin_debug = false;
     std::string smoke_screen;
+    int smoke_replay_row = -1;
+    bool smoke_replay_check = false;
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
@@ -1285,7 +1316,8 @@ int main(int argc, char** argv) {
             smoke_lobby_stage = argv[++i];
             if (smoke_lobby_stage != "choice" && smoke_lobby_stage != "create" &&
                 smoke_lobby_stage != "waiting" && smoke_lobby_stage != "countdown" &&
-                smoke_lobby_stage != "results" && smoke_lobby_stage != "error")
+                smoke_lobby_stage != "results" && smoke_lobby_stage != "error" &&
+                smoke_lobby_stage != "browse")
                 return 2;
             if (online_host.empty())
                 online_host = "127.0.0.1";
@@ -1341,7 +1373,16 @@ int main(int argc, char** argv) {
             verify_path = argv[++i];
         else if (arg == "--capture" && i + 1 < argc)
             capture_path = argv[++i];
-        else if (arg == "--smoke-screen" && i + 1 < argc) {
+        else if (arg == "--smoke-replay-check")
+            smoke_replay_check = true;
+        else if (arg == "--smoke-replay-row" && i + 1 < argc) {
+            const std::string_view value = argv[++i];
+            const auto parsed =
+                std::from_chars(value.data(), value.data() + value.size(), smoke_replay_row);
+            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                smoke_replay_row < 0)
+                return 2;
+        } else if (arg == "--smoke-screen" && i + 1 < argc) {
             smoke_screen = argv[++i];
             if (smoke_screen != "home" && smoke_screen != "pause" &&
                 smoke_screen != "practice-pause" && smoke_screen != "settings" &&
@@ -1370,6 +1411,7 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
+                         "[--smoke-replay-row N] [--smoke-replay-check] "
                          "[--smoke-settings] [--smoke-screen "
                          "home|pause|practice-pause|settings|level|replays] "
                          "[--spin-debug] [--capture FILE.bmp] [--smoke-connect-error] "
@@ -1566,6 +1608,8 @@ int main(int argc, char** argv) {
     std::vector<rl::Entry> replay_entries;
     int replay_row = 0;
     std::size_t playback_index = 0;
+    client::ReplaySeek<game::State> classic_seek;
+    client::ReplaySeek<modern::State> modern_seek;
     std::string notice = "READY / OFFLINE";
     std::deque<std::string> timeline;
     auto release = [&](in::Timestamp when) {
@@ -1575,6 +1619,49 @@ int main(int argc, char** argv) {
             for (auto& axis : pad.axes)
                 axis.reset();
         }
+    };
+    auto playback_size = [&]() {
+        return mode ? modern_loaded.inputs.size() : loaded.inputs.size();
+    };
+    auto finish_playback = [&]() {
+        // Keep the loaded library and its selected row intact, including scroll.
+        screen = Screen::replays;
+        step_once = false;
+        release(SDL_GetTicksNS());
+        notice = "REPLAY COMPLETE / HASH " + number(current_hash());
+    };
+    auto seek_playback = [&](std::size_t target) {
+        target = std::min(target, playback_size());
+        const auto seek_started = SDL_GetTicksNS();
+        const bool seeking_during_play = screen == Screen::play;
+        audio.set_playing(false);
+        const bool ok =
+            mode
+                ? modern_seek.seek(modern_loaded.inputs,
+                                   target,
+                                   modern_state,
+                                   [](auto& value, auto mask) { return modern::step(value, mask); })
+                : classic_seek.seek(loaded.inputs, target, state, [](auto& value, auto mask) {
+                      return game::step(value, mask);
+                  });
+        // Reconstruction time is not playback debt. Paused/end-of-replay time
+        // is already excluded by the regular menu clock handling.
+        if (seeking_during_play && (target < playback_size() || !ok))
+            epoch += SDL_GetTicksNS() - seek_started;
+        if (!ok) {
+            notice = "REPLAY SEEK FAILED";
+            return;
+        }
+        playback_index = target;
+        sync_display();
+        timeline.clear();
+        release(SDL_GetTicksNS());
+        notice = "REPLAY / FRAME " + number(playback_index) + " OF " + number(playback_size());
+        if (playback_index == playback_size())
+            finish_playback();
+    };
+    auto seek_relative = [&](int delta) {
+        seek_playback(client::replay_seek_target(playback_index, playback_size(), delta));
     };
     // Encoding validates every recorded tick. Run that work on an owned snapshot;
     // never replay a long run on the event/render thread. Only one disk writer runs.
@@ -1735,7 +1822,7 @@ int main(int argc, char** argv) {
                                                : selection;
         row = (row + direction + size) % size;
         if (screen == Screen::pause && (!practice || playback)) {
-            while (row == 3 || row == 4)
+            while (row == 3 || row == 4 || (playback && row == 2))
                 row = (row + direction + size) % size;
         }
     };
@@ -1777,18 +1864,24 @@ int main(int argc, char** argv) {
             }
             if (modern_replay) {
                 modern_state = modern_loaded.initial;
+                modern_seek.reset(modern_loaded.initial);
                 mode = modern_state.preset == modern::Preset::fusion ? 1 : 2;
                 sync_display();
             } else {
                 mode = 0;
                 state = loaded.initial;
+                classic_seek.reset(loaded.initial);
             }
             practice = false;
             playback = true;
             playback_index = 0;
+            spin_debug = false;
+            step_once = false;
             screen = Screen::play;
             release(SDL_GetTicksNS());
             notice = "VERIFIED REPLAY / " + entry.timestamp;
+            if (playback_size() == 0)
+                finish_playback();
         } else if (screen == Screen::home) {
             if (selection == 0) {
                 if (save_recording()) {
@@ -1866,18 +1959,17 @@ int main(int argc, char** argv) {
                 release(SDL_GetTicksNS());
             } else if (selection == 1) {
                 if (playback) {
-                    state = loaded.initial;
-                    if (mode) {
-                        modern_state = modern_loaded.initial;
-                        sync_display();
-                    }
-                    playback_index = 0;
+                    seek_playback(0);
+                    if (playback_size() == 0)
+                        return;
                     screen = Screen::play;
                     release(SDL_GetTicksNS());
                     notice = "REPLAY RESTARTED";
                 } else
                     start(practice, false);
             } else if (selection == 2) {
+                if (playback)
+                    return;
                 if (save_recording()) {
                     seed = stackpulse::seeds::random(seed);
                     start(practice, false);
@@ -1900,8 +1992,9 @@ int main(int argc, char** argv) {
             } else {
                 if (!save_recording())
                     return;
-                screen = Screen::home;
-                selection = 0;
+                screen = playback ? Screen::replays : Screen::home;
+                if (!playback)
+                    selection = 0;
                 release(SDL_GetTicksNS());
             }
         }
@@ -1947,6 +2040,53 @@ int main(int argc, char** argv) {
         start(smoke_screen == "practice-pause", false);
         screen = Screen::pause;
         selection = 0;
+    }
+    bool replay_smoke_ok = true;
+    std::uint64_t replay_smoke_hash = 0;
+    std::vector<std::filesystem::path> replay_smoke_paths;
+    if (smoke_replay_row >= 0) {
+        if (!smoke_frames)
+            smoke_frames = 120;
+        std::string error;
+        replay_entries = rl::list(directory, error);
+        if (!error.empty() || smoke_replay_row >= static_cast<int>(replay_entries.size())) {
+            std::fprintf(stderr, "REPLAY_SMOKE FAIL invalid library row\n");
+            running = false;
+            replay_smoke_ok = false;
+        } else {
+            for (const auto& entry : replay_entries)
+                replay_smoke_paths.push_back(entry.path);
+            replay_row = smoke_replay_row;
+            screen = Screen::replays;
+            confirm();
+            replay_smoke_ok = playback;
+            if (smoke_replay_check && playback) {
+                if (mode) {
+                    modern::State expected;
+                    replay_smoke_ok = mr::verify(modern_loaded, expected, error);
+                    replay_smoke_hash = modern::state_hash(expected);
+                } else {
+                    game::State expected;
+                    replay_smoke_ok = replay::verify(loaded, expected, error);
+                    replay_smoke_hash = game::state_hash(expected);
+                }
+                if (playback_size()) {
+                    screen = Screen::pause;
+                    seek_playback(playback_size() / 2);
+                    replay_smoke_ok = replay_smoke_ok && screen == Screen::pause;
+                    seek_relative(-300);
+                    selection = 1;
+                    confirm(); // Restart from pause through the actual menu action.
+                    replay_smoke_ok = replay_smoke_ok && playback_index == 0;
+                    seek_playback(playback_size() - 1);
+                    screen = Screen::play; // Let the final frame finish naturally.
+                }
+            }
+        }
+    } else if (smoke_replay_check) {
+        std::fprintf(stderr, "--smoke-replay-check requires --smoke-replay-row\n");
+        running = false;
+        replay_smoke_ok = false;
     }
     std::printf("Stackpulse independent provisional presets; prefs=%s\n",
                 directory.string().c_str());
@@ -2033,6 +2173,24 @@ int main(int argc, char** argv) {
                     break;
                 }
                 if (event.key.down) {
+                    if (playback && (screen == Screen::play || screen == Screen::pause)) {
+                        if (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT) {
+                            seek_relative(code == SDL_SCANCODE_LEFT ? -300 : 300);
+                            break;
+                        }
+                        if (code == SDL_SCANCODE_PAGEUP || code == SDL_SCANCODE_PAGEDOWN) {
+                            seek_relative(code == SDL_SCANCODE_PAGEUP ? -3600 : 3600);
+                            break;
+                        }
+                        if (code == SDL_SCANCODE_HOME || code == SDL_SCANCODE_END) {
+                            seek_playback(code == SDL_SCANCODE_HOME ? 0 : playback_size());
+                            break;
+                        }
+                        if (code == SDL_SCANCODE_SPACE) {
+                            pause();
+                            break;
+                        }
+                    }
                     if (code == SDL_SCANCODE_ESCAPE ||
                         (map_action(code, false) == in::Action::pause &&
                          (screen == Screen::play ||
@@ -2118,6 +2276,22 @@ int main(int argc, char** argv) {
                 if (spin_debug)
                     break;
                 if (event.gbutton.down) {
+                    if (playback && (screen == Screen::play || screen == Screen::pause)) {
+                        if (code == SDL_GAMEPAD_BUTTON_DPAD_LEFT ||
+                            code == SDL_GAMEPAD_BUTTON_DPAD_RIGHT) {
+                            seek_relative(code == SDL_GAMEPAD_BUTTON_DPAD_LEFT ? -300 : 300);
+                            break;
+                        }
+                        if (code == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ||
+                            code == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) {
+                            seek_relative(code == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER ? -3600 : 3600);
+                            break;
+                        }
+                        if (screen == Screen::play && code == SDL_GAMEPAD_BUTTON_SOUTH) {
+                            pause();
+                            break;
+                        }
+                    }
                     if (code == SDL_GAMEPAD_BUTTON_BACK ||
                         (code == SDL_GAMEPAD_BUTTON_EAST &&
                          (screen == Screen::level || screen == Screen::replays)) ||
@@ -2210,9 +2384,7 @@ int main(int argc, char** argv) {
                 if (playback) {
                     if (playback_index ==
                         (mode ? modern_loaded.inputs.size() : loaded.inputs.size())) {
-                        screen = Screen::pause;
-                        selection = 0;
-                        notice = "REPLAY COMPLETE / HASH " + number(current_hash());
+                        finish_playback();
                         continue;
                     }
                     mask = mode ? modern_loaded.inputs[playback_index++]
@@ -2270,6 +2442,11 @@ int main(int argc, char** argv) {
                         else
                             recording.inputs.push_back(mask);
                         saves.set_dirty(true);
+                    } else {
+                        if (mode)
+                            modern_seek.observe(playback_index, modern_state);
+                        else
+                            classic_seek.observe(playback_index, state);
                     }
                     if (events.cleared)
                         notice = number(events.cleared) + " LINES CLEARED";
@@ -2287,6 +2464,8 @@ int main(int argc, char** argv) {
                         screen = Screen::pause;
                         selection = 1;
                     }
+                    if (playback && playback_index == playback_size())
+                        finish_playback();
                 }
                 if (step_once) {
                     step_once = false;
@@ -2583,6 +2762,8 @@ int main(int argc, char** argv) {
                                                           "MAIN MENU"};
                 int visible_row = 0;
                 for (int i = 0; i < 7; ++i) {
+                    if (playback && i == 2)
+                        continue;
                     if ((i == 3 || i == 4) && (!practice || playback))
                         continue;
                     const float y = 89.F + visible_row++ * 25.F;
@@ -2592,7 +2773,8 @@ int main(int argc, char** argv) {
                          414,
                          y,
                          std::string(selection == i ? "> " : "  ") +
-                             menu[static_cast<std::size_t>(i)],
+                             (playback && i == 6 ? "REPLAY LIST"
+                                                 : menu[static_cast<std::size_t>(i)]),
                          selection == i ? mint : ink);
                 }
             } else if (help) {
@@ -2613,6 +2795,18 @@ int main(int argc, char** argv) {
                          modern_state.back_to_back ? "BACK TO BACK" : "B2B READY",
                          muted);
                 }
+            }
+            if (playback) {
+                const auto total = playback_size();
+                const float progress =
+                    total ? static_cast<float>(playback_index) / static_cast<float>(total) : 1.F;
+                text(renderer,
+                     390,
+                     237,
+                     "REPLAY / " + number(playback_index / 60) + "S / " + number(total / 60) + "S",
+                     mint);
+                rect(renderer, 390, 254, 230, 8, {47, 67, 89, 255});
+                rect(renderer, 390, 254, 230 * progress, 8, mint);
             }
             if (help && practice && !mode) {
                 int row = 0;
@@ -2644,6 +2838,19 @@ int main(int argc, char** argv) {
             running = false;
         SDL_Delay(1);
     }
+    if (smoke_replay_check) {
+        replay_smoke_ok = replay_smoke_ok && screen == Screen::replays &&
+                          replay_row == smoke_replay_row && current_hash() == replay_smoke_hash &&
+                          replay_entries.size() == replay_smoke_paths.size();
+        for (std::size_t i = 0; i < replay_smoke_paths.size(); ++i)
+            replay_smoke_ok = replay_smoke_ok && replay_entries[i].path == replay_smoke_paths[i];
+        std::printf("REPLAY_SMOKE %s row=%d first=%d frame=%zu hash=%llu\n",
+                    replay_smoke_ok ? "PASS" : "FAIL",
+                    replay_row,
+                    std::max(0, replay_row - 6),
+                    playback_index,
+                    static_cast<unsigned long long>(current_hash()));
+    }
     poll_save(true);
     // Finish the active snapshot before scheduling the final run, then drain it.
     if (saves.retry_needed()) {
@@ -2669,5 +2876,5 @@ int main(int argc, char** argv) {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 0;
+    return replay_smoke_ok ? 0 : 1;
 }

@@ -62,6 +62,40 @@ TEST_CASE("Online sound counters survive skipped snapshots without replaying cor
     REQUIRE(sounds.observe(view) == std::vector{client::Cue::clear});
 }
 
+TEST_CASE("Lobby directory keeps room and footer selections stable across refreshes",
+          "[online][ui]") {
+    namespace net = stackpulse::net;
+    namespace client = stackpulse::client;
+    net::RoomInfo first, second, third;
+    first.code = "FIRST";
+    second.code = "SECOND";
+    third.code = "THIRD";
+    const std::vector<net::RoomInfo> rooms{first, second};
+    const std::vector<net::RoomInfo> expanded{third, second, first};
+    REQUIRE(client::directory_selection(0, rooms, expanded) == 2);
+    REQUIRE(client::directory_selection(1, rooms, expanded) == 1);
+    REQUIRE(client::directory_selection(1, rooms, {first}) == 0);
+    REQUIRE(client::directory_selection(1, rooms, {}) == 0);
+    for (const auto& directory : {std::vector<net::RoomInfo>{}, rooms, expanded}) {
+        const auto count = static_cast<int>(directory.size());
+        REQUIRE(client::directory_action(count, directory.size()) ==
+                client::DirectoryAction::refresh);
+        REQUIRE(client::directory_action(count + 1, directory.size()) ==
+                client::DirectoryAction::back);
+        for (const auto& refreshed : {std::vector<net::RoomInfo>{}, rooms, expanded}) {
+            const auto refreshed_count = static_cast<int>(refreshed.size());
+            REQUIRE(client::directory_selection(count, directory, refreshed) == refreshed_count);
+            REQUIRE(client::directory_selection(count + 1, directory, refreshed) ==
+                    refreshed_count + 1);
+            REQUIRE(client::directory_selection(999, directory, refreshed) == refreshed_count + 1);
+            const auto selected = client::directory_selection(-1, directory, refreshed);
+            REQUIRE(selected >= 0);
+            REQUIRE(selected <= refreshed_count + 1);
+        }
+    }
+    REQUIRE(client::directory_action(0, rooms.size()) == client::DirectoryAction::join);
+}
+
 TEST_CASE("Lobby actions keep Leave reachable for every member and phase", "[online][ui]") {
     namespace net = stackpulse::net;
     namespace client = stackpulse::client;

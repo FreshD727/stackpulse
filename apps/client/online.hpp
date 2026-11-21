@@ -62,6 +62,27 @@ class OnlineSoundObserver {
     bool initialized_{};
     decltype(net::SoundCounters::counts) counts_{};
 };
+enum class DirectoryAction { join, refresh, back };
+inline DirectoryAction directory_action(int row, std::size_t room_count) {
+    return row < static_cast<int>(room_count)    ? DirectoryAction::join
+           : row == static_cast<int>(room_count) ? DirectoryAction::refresh
+                                                 : DirectoryAction::back;
+}
+inline int directory_selection(int row,
+                               const std::vector<net::RoomInfo>& previous,
+                               const std::vector<net::RoomInfo>& current) {
+    row = std::clamp(row, 0, static_cast<int>(previous.size()) + 1);
+    // Keep footer actions selected when refresh adds or removes rooms.
+    if (row >= static_cast<int>(previous.size()))
+        return static_cast<int>(current.size()) + row - static_cast<int>(previous.size());
+    const auto selected = std::find_if(current.begin(), current.end(), [&](const auto& room) {
+        return room.code == previous[static_cast<std::size_t>(row)].code;
+    });
+    if (selected != current.end())
+        return static_cast<int>(selected - current.begin());
+    return std::clamp(row, 0, std::max(0, static_cast<int>(current.size()) - 1));
+}
+
 enum class RoomAction { ready, return_to_lobby, leave };
 inline std::vector<RoomAction> room_actions(const net::View& view) {
     std::vector<RoomAction> actions;
