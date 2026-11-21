@@ -17,6 +17,7 @@
 #include <stackpulse/input.hpp>
 #include <stackpulse/modern_replay.hpp>
 #include <stackpulse/replay.hpp>
+#include <stackpulse/seeds.hpp>
 #include <string>
 #include <string_view>
 
@@ -247,11 +248,6 @@ online_menu(SDL_Renderer* renderer,
                  100.F + i * 36.F,
                  std::string(row == i ? "> " : "  ") + rows[i],
                  row == i ? mint : ink);
-        text(renderer,
-             40,
-             260,
-             editing ? "TYPE / ENTER DONE / BACKSPACE ERASE" : "ENTER / SOUTH / START: CONTINUE",
-             muted);
         if (smoke_frames && ++frames >= smoke_frames) {
             if (!capture_path.empty()) {
                 auto* capture = SDL_RenderReadPixels(renderer, nullptr);
@@ -334,7 +330,9 @@ int run_online(SDL_Renderer* renderer,
     int lobby_row = 0;
     std::string password;
     client::RoomSelection room_selection;
-    bool lobby_editing = false, help = false;
+    bool lobby_editing = false;
+    int room_row = 0;
+    auto room_phase = net::Phase::connecting;
     std::uint64_t directory_refresh = 0;
     auto lobby_field = [&]() -> std::string* {
         if (lobby_page == LobbyPage::password)
@@ -408,11 +406,32 @@ int run_online(SDL_Renderer* renderer,
                           speed,
                           cell);
     };
+    net::View smoke_view;
+    const bool smoke_room = smoke_lobby_stage == "waiting" || smoke_lobby_stage == "countdown" ||
+                            smoke_lobby_stage == "results";
+    if (smoke_room) {
+        smoke_view.phase = smoke_lobby_stage == "results"     ? net::Phase::results
+                           : smoke_lobby_stage == "countdown" ? net::Phase::countdown
+                                                              : net::Phase::waiting;
+        smoke_view.room_id = 1;
+        smoke_view.room_code = "ABCD";
+        smoke_view.room.name = "Evening lobby";
+        smoke_view.room.preset = preset;
+        smoke_view.member_id = smoke_view.manager_id = smoke_view.player = 1;
+        smoke_view.player_limit = 8;
+        smoke_view.countdown = 180;
+        smoke_view.members = {{1, 1, "Player", net::Role::player, false, true},
+                              {2, 2, "Rival", net::Role::player, true, true}};
+    }
     while (running) {
         if (smoke_lobby_stage.empty())
             connection.poll();
         const auto now = SDL_GetTicksNS();
-        const auto& view = connection.view();
+        const auto& view = smoke_room ? smoke_view : connection.view();
+        const auto room_actions = client::room_actions(view);
+        if (room_phase != view.phase || room_row >= static_cast<int>(room_actions.size()))
+            room_row = 0;
+        room_phase = view.phase;
         if (view.room_id)
             preset = view.room.preset;
         if (view.phase == net::Phase::browsing && now >= directory_refresh) {
@@ -492,10 +511,6 @@ int run_online(SDL_Renderer* renderer,
                 const int code = pad ? event.gbutton.button : event.key.scancode;
                 if ((!pad && event.key.repeat) || (!focused && !bot))
                     continue;
-                if (down && !pad && code == SDL_SCANCODE_F1) {
-                    help = !help;
-                    continue;
-                }
                 if (view.phase == net::Phase::browsing) {
                     if (!down)
                         continue;
@@ -593,6 +608,35 @@ int run_online(SDL_Renderer* renderer,
                     }
                     continue;
                 }
+                if (down && !overlay && !room_actions.empty()) {
+                    auto key = [&](int k, int b) { return code == (pad ? b : k); };
+                    const int rows = static_cast<int>(room_actions.size());
+                    if (key(SDL_SCANCODE_UP, SDL_GAMEPAD_BUTTON_DPAD_UP)) {
+                        room_row = (room_row + rows - 1) % rows;
+                        continue;
+                    }
+                    if (key(SDL_SCANCODE_DOWN, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) {
+                        room_row = (room_row + 1) % rows;
+                        continue;
+                    }
+                    if (key(SDL_SCANCODE_RETURN, SDL_GAMEPAD_BUTTON_SOUTH) ||
+                        (pad && code == SDL_GAMEPAD_BUTTON_START)) {
+                        const auto selected = room_actions[static_cast<std::size_t>(room_row)];
+                        if (selected == client::RoomAction::leave) {
+                            release();
+                            connection.leave_room();
+                            lobby_page = LobbyPage::browse;
+                            lobby_row = room_row = 0;
+                            ready_requested = false;
+                            directory_refresh = 0;
+                        } else if (selected == client::RoomAction::return_to_lobby) {
+                            connection.return_to_lobby();
+                            ready_requested = false;
+                        } else
+                            connection.set_ready(!view.ready);
+                        continue;
+                    }
+                }
                 if (down && view.phase == net::Phase::waiting &&
                     view.member_id == view.manager_id && preset != modern::Preset::modern &&
                     ((!pad && (code == SDL_SCANCODE_LEFT || code == SDL_SCANCODE_RIGHT)) ||
@@ -639,8 +683,13 @@ int run_online(SDL_Renderer* renderer,
                             ready_requested = false;
                             prediction.reset();
                             connection.reconnect();
-                        } else if (overlay_selection == 2)
-                            running = false;
+                        } else if (overlay_selection == 2) {
+                            connection.leave_room();
+                            lobby_page = LobbyPage::browse;
+                            lobby_row = room_row = 0;
+                            ready_requested = false;
+                            directory_refresh = 0;
+                        }
                         overlay = false;
                         continue;
                     }
@@ -656,21 +705,6 @@ int run_online(SDL_Renderer* renderer,
                         prediction.reset();
                         connection.reconnect();
                         continue;
-                    }
-                    if ((!pad && code == SDL_SCANCODE_RETURN) ||
-                        (pad &&
-                         (code == SDL_GAMEPAD_BUTTON_SOUTH || code == SDL_GAMEPAD_BUTTON_START) &&
-                         (view.phase == net::Phase::waiting ||
-                          view.phase == net::Phase::results))) {
-                        if (view.phase == net::Phase::results) {
-                            if (view.member_id == view.manager_id)
-                                connection.return_to_lobby();
-                            ready_requested = false;
-                        } else if (view.phase == net::Phase::waiting &&
-                                   view.role == net::Role::player)
-                            connection.set_ready(!view.ready);
-                        if (view.phase != net::Phase::playing)
-                            continue;
                     }
                     if (logical == in::Action::pause) {
                         overlay = !overlay;
@@ -777,7 +811,7 @@ int run_online(SDL_Renderer* renderer,
         color(renderer, {9, 15, 27, 255});
         SDL_RenderClear(renderer);
         text(renderer, 20, 14, "STACKPULSE", mint);
-        if (view.phase != net::Phase::browsing && smoke_lobby_stage.empty()) {
+        if (view.phase != net::Phase::browsing && (smoke_lobby_stage.empty() || smoke_room)) {
             text(renderer,
                  20,
                  32,
@@ -864,12 +898,6 @@ int run_online(SDL_Renderer* renderer,
                           client::classic_palette_piece(main_board->next[i]),
                           modern::gravity_interval(*main_board),
                           7);
-            if (help && preset != modern::Preset::classic && !watching && selected_target)
-                text(renderer,
-                     165,
-                     318,
-                     "TARGET " + player_label(selected_target).substr(0, 8),
-                     mint);
         } else
             text(renderer, 165, 100, "AWAITING SNAPSHOT", muted);
         if (view.has_snapshot) {
@@ -917,7 +945,7 @@ int run_online(SDL_Renderer* renderer,
         }
         if (view.phase == net::Phase::waiting || view.phase == net::Phase::countdown ||
             view.phase == net::Phase::results) {
-            rect(renderer, 0, 51, 640, 270, {18, 32, 47, 255});
+            rect(renderer, 0, 51, 640, 290, {18, 32, 47, 255});
             text(renderer,
                  32,
                  62,
@@ -931,12 +959,8 @@ int run_online(SDL_Renderer* renderer,
                         if (!p.placement)
                             result = player_label(p.id).substr(0, 24) + " WINS";
                 text(renderer, 32, 85, "SERVER RESULT: " + result, mint);
-                text(renderer,
-                     32,
-                     106,
-                     view.member_id == view.manager_id ? "ENTER / SOUTH: RETURN TO LOBBY"
-                                                       : "WAITING FOR MANAGER TO RETURN ROOM",
-                     ink);
+                if (view.member_id != view.manager_id)
+                    text(renderer, 32, 106, "WAITING FOR MANAGER TO RETURN ROOM", ink);
             } else if (view.phase == net::Phase::countdown)
                 text(renderer, 32, 85, "START IN " + number((view.countdown + 59) / 60), mint);
             else
@@ -944,8 +968,8 @@ int run_online(SDL_Renderer* renderer,
                      32,
                      85,
                      watching     ? "WATCHING / WAIT FOR PLAYERS"
-                     : view.ready ? "READY / START TO CANCEL"
-                                  : "ENTER / SOUTH / START: READY",
+                     : view.ready ? "READY"
+                                  : "WAITING",
                      mint);
             const auto manager =
                 std::find_if(view.members.begin(), view.members.end(), [&](const auto& member) {
@@ -998,16 +1022,33 @@ int run_online(SDL_Renderer* renderer,
                  muted);
             text(renderer,
                  32,
-                 298,
-                 view.phase == net::Phase::results ? "MATCH COMPLETE"
-                 : preset != modern::Preset::modern
-                     ? "START LEVEL " + number(view.room.start_level) +
-                           (view.member_id == view.manager_id ? " / LEFT-RIGHT CHANGE"
-                                                              : " / MANAGER SETS LEVEL")
-                     : "ALL PLAYERS READY TO START",
+                 294,
+                 view.phase == net::Phase::results  ? "MATCH COMPLETE"
+                 : preset != modern::Preset::modern ? "START LEVEL " + number(view.room.start_level)
+                                                    : "ALL PLAYERS READY TO START",
                  muted);
+            for (int i = 0; i < static_cast<int>(room_actions.size()); ++i) {
+                const auto choice = room_actions[static_cast<std::size_t>(i)];
+                const std::string label = choice == client::RoomAction::leave ? "LEAVE LOBBY"
+                                          : choice == client::RoomAction::return_to_lobby
+                                              ? "RETURN TO LOBBY"
+                                          : view.ready ? "CANCEL READY"
+                                                       : "READY";
+                const float x = 32.F + i * 224.F;
+                rect(renderer,
+                     x,
+                     310,
+                     208,
+                     24,
+                     i == room_row ? SDL_Color{26, 77, 70, 255} : SDL_Color{29, 48, 65, 255});
+                text(renderer,
+                     x + 8,
+                     318,
+                     std::string(i == room_row ? "> " : "  ") + label,
+                     i == room_row ? mint : ink);
+            }
         }
-        if (view.phase == net::Phase::browsing || !smoke_lobby_stage.empty()) {
+        if (view.phase == net::Phase::browsing || (!smoke_lobby_stage.empty() && !smoke_room)) {
             rect(renderer, 0, 50, 640, 290, {9, 15, 27, 255});
             std::vector<std::string> rows;
             std::string title;
@@ -1051,39 +1092,22 @@ int run_online(SDL_Renderer* renderer,
                      92.F + (i - first) * 26.F,
                      std::string(i == lobby_row ? "> " : "  ") + rows[i],
                      i == lobby_row ? mint : ink);
-            text(renderer,
-                 32,
-                 291,
-                 lobby_editing ? "TYPE / ENTER DONE"
-                               : "UP/DOWN SELECT / LEFT/RIGHT CHANGE / SOUTH CONFIRM",
-                 muted);
-            if (lobby_page == LobbyPage::browse)
-                text(renderer, 32, 308, "ENTER / SOUTH: JOIN PLAYER   W / WEST: WATCH", muted);
             if (!view.operation_error.empty())
                 text(renderer, 32, 327, view.operation_error.substr(0, 74), {255, 174, 93, 255});
         }
         if (overlay) {
             rect(renderer, 306, 103, 314, 130, {26, 61, 65, 255});
             text(renderer, 318, 114, "INPUT RELEASED / MATCH CONTINUES", mint);
-            const std::array<const char*, 3> choices{"RESUME INPUT", "RECONNECT", "LEAVE ROOM"};
+            const std::array<const char*, 3> choices{"RESUME INPUT", "RECONNECT", "LEAVE LOBBY"};
             for (int i = 0; i < 3; ++i)
                 text(renderer,
                      318,
                      139.F + i * 24.F,
                      std::string(overlay_selection == i ? "> " : "  ") + choices[i],
                      overlay_selection == i ? mint : ink);
-            text(renderer, 318, 215, "UP/DOWN / SOUTH OR ENTER", muted);
         }
-        if (help)
-            text(renderer, 16, 337, "F9 RECONNECT / ESC-START MENU", muted);
-        if (help && preset != modern::Preset::classic)
-            text(renderer,
-                 320,
-                 337,
-                 watching ? "TAB / R-STICK: FEATURE" : "TAB / R-STICK: TARGET",
-                 muted);
         rect(renderer, 0, 345, 640, 15, {19, 33, 49, 255});
-        text(renderer, 8, 349, help ? view.detail.substr(0, 76) : "F1 HELP", muted);
+        text(renderer, 8, 349, view.detail.substr(0, 76), muted);
         if (!smoke_lobby_stage.empty() && ++smoke_lobby_frames >= 8)
             running = false;
         const bool capture_live = capture_tick && !live_captured &&
@@ -1134,10 +1158,12 @@ int run_online(SDL_Renderer* renderer,
 #endif
 } // namespace
 int main(int argc, char** argv) {
+    std::optional<std::uint32_t> initial_seed;
     int smoke_frames = 0;
     bool smoke_play = false, smoke_settings = false, force_sticks = false, muted_audio = false;
     std::filesystem::path data_directory, verify_path, capture_path;
     bool smoke_spin_debug = false;
+    std::string smoke_screen;
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
@@ -1154,7 +1180,9 @@ int main(int argc, char** argv) {
             online_host = argv[++i];
         else if (arg == "--smoke-lobby-stage" && i + 1 < argc) {
             smoke_lobby_stage = argv[++i];
-            if (smoke_lobby_stage != "choice" && smoke_lobby_stage != "create")
+            if (smoke_lobby_stage != "choice" && smoke_lobby_stage != "create" &&
+                smoke_lobby_stage != "waiting" && smoke_lobby_stage != "countdown" &&
+                smoke_lobby_stage != "results")
                 return 2;
             if (online_host.empty())
                 online_host = "127.0.0.1";
@@ -1198,11 +1226,24 @@ int main(int argc, char** argv) {
                 mode = 2;
             else
                 return 2;
+        } else if (arg == "--seed" && i + 1 < argc) {
+            std::uint32_t value{};
+            const std::string_view number_arg = argv[++i];
+            const auto parsed =
+                std::from_chars(number_arg.data(), number_arg.data() + number_arg.size(), value);
+            if (parsed.ec != std::errc{} || parsed.ptr != number_arg.data() + number_arg.size())
+                return 2;
+            initial_seed = value;
         } else if (arg == "--verify" && i + 1 < argc)
             verify_path = argv[++i];
         else if (arg == "--capture" && i + 1 < argc)
             capture_path = argv[++i];
-        else if (arg == "--smoke-settings")
+        else if (arg == "--smoke-screen" && i + 1 < argc) {
+            smoke_screen = argv[++i];
+            if (smoke_screen != "home" && smoke_screen != "pause" &&
+                smoke_screen != "practice-pause" && smoke_screen != "settings")
+                return 2;
+        } else if (arg == "--smoke-settings")
             smoke_settings = true;
         else if (arg == "--data-dir" && i + 1 < argc)
             data_directory = argv[++i];
@@ -1225,8 +1266,9 @@ int main(int argc, char** argv) {
             std::fprintf(stderr,
                          "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
-                         "[--smoke-settings] [--spin-debug] [--capture FILE.bmp] "
-                         "[--verify FILE] [--connect HOST --port N] "
+                         "[--smoke-settings] [--smoke-screen home|pause|practice-pause|settings] "
+                         "[--spin-debug] [--capture FILE.bmp] "
+                         "[--seed N] [--verify FILE] [--connect HOST --port N] "
                          "[--spectate] [--room CODE] [--name NAME] [--create] "
                          "[--online-bot --online-exit-ticks N] [--online-capture-tick N] "
                          "[--online-ready-delay-ms N] [--smoke-multiplayer-menu]\n");
@@ -1385,8 +1427,11 @@ int main(int argc, char** argv) {
     bool spin_debug = false;
     std::uint8_t spin_debug_rotation = 0;
     Screen screen = Screen::home, settings_return = Screen::home;
-    game::State state = game::initial_state(1);
-    modern::State modern_state = modern::initial_state(1);
+    std::uint32_t seed = initial_seed ? *initial_seed : stackpulse::seeds::random();
+    std::printf("SOLO_SEED seed=%u\n", static_cast<unsigned>(seed));
+    bool seed_used = false;
+    game::State state = game::initial_state(seed);
+    modern::State modern_state = modern::initial_state(seed);
     mr::Replay modern_recording{modern_state, {}}, modern_loaded;
     auto preset = [&]() { return mode == 1 ? modern::Preset::fusion : modern::Preset::modern; };
     auto mode_name = [&]() -> std::string {
@@ -1404,7 +1449,6 @@ int main(int argc, char** argv) {
     auto current_hash = [&]() {
         return mode ? modern::state_hash(modern_state) : game::state_hash(state);
     };
-    std::uint32_t seed = 1;
     replay::Replay recording{state, {}}, loaded;
     std::size_t playback_index = 0;
     std::string notice = "READY / OFFLINE";
@@ -1461,9 +1505,12 @@ int main(int argc, char** argv) {
         notice = "SAVING REPLAY";
         return true;
     };
-    auto start = [&](bool lab, bool fixture) {
+    auto start = [&](bool lab, bool fixture, bool fresh = false) {
         if (!save_recording())
             return;
+        if (fresh && seed_used)
+            seed = stackpulse::seeds::random(seed);
+        seed_used = true;
         spin_debug = false;
         practice = lab;
         playback = false;
@@ -1487,10 +1534,9 @@ int main(int argc, char** argv) {
         timeline.clear();
         release(SDL_GetTicksNS());
         notice = mode && garbage_fixture ? "GARBAGE DEMO / 4 ROWS ELIGIBLE AT TICK 60"
-                 : fixture
-                     ? (mode ? "SPIN FIXTURE / CW THEN LOCK / " + number(fixture_rows) + " LINES"
-                             : "FOUR-LINE FIXTURE / HOLD DOWN")
-                     : "NEW RUN / SEED " + number(seed);
+                 : fixture ? (mode ? "SPIN FIXTURE / " + number(fixture_rows) + " LINES"
+                                   : "FOUR-LINE FIXTURE")
+                           : "NEW RUN / SEED " + number(seed);
     };
     auto push = [&](in::Transition value, bool repeat = false) {
         if (repeat)
@@ -1566,12 +1612,16 @@ int main(int argc, char** argv) {
         const int size = screen == Screen::home ? 7 : screen == Screen::pause ? 7 : 19;
         int& row = screen == Screen::settings ? settings_row : selection;
         row = (row + direction + size) % size;
+        if (screen == Screen::pause && (!practice || playback)) {
+            while (row == 3 || row == 4)
+                row = (row + direction + size) % size;
+        }
     };
     auto confirm = [&]() {
         if (screen == Screen::settings) {
             if (settings_row < 16) {
                 capture = settings_row;
-                notice = "PRESS A NEW BINDING / ESC CANCELS";
+                notice = "AWAITING NEW BINDING";
             } else if (settings_row == 16) {
                 settings.sticks = !settings.sticks;
                 save_settings();
@@ -1588,7 +1638,7 @@ int main(int argc, char** argv) {
                 }
             } else if (selection == 1 || selection == 2) {
                 garbage_fixture = false;
-                start(selection == 2, false);
+                start(selection == 2, false, true);
             } else if (selection == 3) {
                 std::string error;
                 if (!save_recording())
@@ -1679,7 +1729,7 @@ int main(int argc, char** argv) {
                     start(practice, false);
             } else if (selection == 2) {
                 if (save_recording()) {
-                    ++seed;
+                    seed = stackpulse::seeds::random(seed);
                     start(practice, false);
                 }
             } else if (selection == 3) {
@@ -1730,6 +1780,15 @@ int main(int argc, char** argv) {
     }
     if (smoke_settings)
         screen = Screen::settings;
+    if (smoke_screen == "home")
+        screen = Screen::home;
+    else if (smoke_screen == "settings")
+        screen = Screen::settings;
+    else if (smoke_screen == "pause" || smoke_screen == "practice-pause") {
+        start(smoke_screen == "practice-pause", false);
+        screen = Screen::pause;
+        selection = 0;
+    }
     std::printf("Stackpulse independent provisional presets; prefs=%s\n",
                 directory.string().c_str());
     auto previous_frame_time = SDL_GetTicksNS();
@@ -1849,7 +1908,7 @@ int main(int argc, char** argv) {
                     }
                     if (code == SDL_SCANCODE_F3 && !playback) {
                         if (save_recording()) {
-                            ++seed;
+                            seed = stackpulse::seeds::random(seed);
                             start(practice, false);
                         }
                         break;
@@ -2078,16 +2137,15 @@ int main(int argc, char** argv) {
             rect(renderer, 0, static_cast<float>(line * 32), 640, 1, {13, 23, 38, 255});
         text(renderer, 20, 15, "STACKPULSE", mint);
         text(renderer, 20, 31, mode_name(), muted);
-        text(renderer, 548, 31, "F1 HELP", muted);
         rect(renderer, 18, 50, 604, 1, {48, 66, 88, 255});
         if (screen == Screen::home) {
             text(renderer, 36, 77, "BUILD. CLEAR. FIND YOUR RHYTHM.", ink);
-            const std::array<std::string, 7> menu{"MODE: " + mode_name() + " / ENTER CYCLES",
+            const std::array<std::string, 7> menu{"TOGGLE MODE: " + mode_name(),
                                                   "MARATHON",
                                                   "PRACTICE LAB",
-                                                  "PLAY LAST REPLAY",
-                                                  "SETTINGS / CONTROLS",
-                                                  "MULTIPLAYER / ROOMS",
+                                                  "REPLAY",
+                                                  "SETTINGS",
+                                                  "MULTIPLAYER",
                                                   "QUIT"};
             for (int i = 0; i < 7; ++i) {
                 if (selection == i)
@@ -2114,11 +2172,10 @@ int main(int argc, char** argv) {
             if (help) {
                 text(renderer, 382, 202, "PRACTICE TOOLS", mint);
                 text(renderer, 382, 225, "SEEDS / FRAME STEP");
-                text(renderer, 382, 244, mode ? "F7-9 SPINS / F10 GARBAGE" : "FOUR-LINE FIXTURE");
+                text(renderer, 382, 244, mode ? "SPIN / GARBAGE FIXTURES" : "FOUR-LINE FIXTURE");
             }
-            text(renderer, 36, 294, "ARROWS OR W/S + ENTER / D-PAD + SOUTH", muted);
         } else if (screen == Screen::settings) {
-            text(renderer, 30, 65, "CONTROLS / SELECT TO REMAP", mint);
+            text(renderer, 30, 65, "CONTROLS", mint);
             for (int i = 0; i < 16; ++i) {
                 const bool pad = i >= 8;
                 const auto slot = static_cast<std::size_t>(i % 8);
@@ -2151,14 +2208,11 @@ int main(int argc, char** argv) {
                      (settings.sticks ? "ON (.55/.35 HYSTERESIS)" : "OFF"));
             if (settings_row == 17)
                 rect(renderer, 24, 290, 585, 22, {26, 61, 65, 255});
-            text(renderer,
-                 30,
-                 297,
-                 "CLASSIC / FUSION START LEVEL: " + number(settings.start_level) +
-                     " / LEFT - RIGHT + / ENTER CYCLES");
+            text(
+                renderer, 30, 297, "CLASSIC / FUSION START LEVEL: " + number(settings.start_level));
             if (settings_row == 18)
                 rect(renderer, 24, 316, 585, 22, {26, 61, 65, 255});
-            text(renderer, 30, 323, "BACK / ESC OR PAD BACK");
+            text(renderer, 30, 323, "BACK");
         } else {
             const auto palette_speed =
                 mode ? modern::gravity_interval(modern_state) : game::gravity_frames(state.level);
@@ -2288,8 +2342,7 @@ int main(int argc, char** argv) {
                     }
                 }
                 text(renderer, 382, 65, "SPIN INSPECTOR / FROZEN", mint);
-                text(renderer, 382, 83, "F11 / ESC CLOSE", muted);
-                text(renderer, 382, 101, "F12 ORIENTATION: " + number(spin_debug_rotation));
+                text(renderer, 382, 101, "ORIENTATION: " + number(spin_debug_rotation));
                 text(renderer, 382, 119, "CANDIDATES IGNORE HISTORY", muted);
                 text(renderer,
                      382,
@@ -2325,8 +2378,11 @@ int main(int argc, char** argv) {
                                                           "CLEAR FIXTURE",
                                                           "SETTINGS",
                                                           "MAIN MENU"};
+                int visible_row = 0;
                 for (int i = 0; i < 7; ++i) {
-                    const float y = 89.F + i * 25.F;
+                    if ((i == 3 || i == 4) && (!practice || playback))
+                        continue;
+                    const float y = 89.F + visible_row++ * 25.F;
                     if (selection == i)
                         rect(renderer, 406, y - 4, 214, 22, {26, 61, 65, 255});
                     text(renderer,
@@ -2338,25 +2394,6 @@ int main(int argc, char** argv) {
                 }
             } else if (help) {
                 text(renderer, 414, 66, mode_name(), mint);
-                text(renderer, 414, 87, "CONTROLS", mint);
-                unsigned control_row = 0;
-                for (std::size_t i = 0; i < 8; ++i) {
-                    if ((i == 6 && mode != 2) || (i == 7 && !mode))
-                        continue;
-                    text(renderer,
-                         414,
-                         106.F + static_cast<float>(control_row++) * 16.F,
-                         std::string(names[i]) + ": " +
-                             SDL_GetScancodeName(static_cast<SDL_Scancode>(settings.keys[i])),
-                         muted);
-                }
-                text(renderer, 414, 243, "F2 RESTART  F3 NEW SEED", muted);
-                text(renderer,
-                     414,
-                     259,
-                     practice ? "F4 STEP / F5 FIXTURE" : "ESC / START: PAUSE",
-                     muted);
-                text(renderer, 414, 275, "F6 SAVE REPLAY", muted);
                 if (mode) {
                     unsigned pending = 0;
                     for (const auto& packet : modern_state.incoming)
@@ -2372,8 +2409,6 @@ int main(int argc, char** argv) {
                          307,
                          modern_state.back_to_back ? "BACK TO BACK" : "B2B READY",
                          muted);
-                    if (practice)
-                        text(renderer, 320, 329, "F7-9 SPIN F10 GARB F11 VIEW", muted);
                 }
             }
             if (help && practice && !mode) {
@@ -2382,15 +2417,11 @@ int main(int argc, char** argv) {
                     text(renderer, 320, 310.F + static_cast<float>(row++) * 9.F, item, muted);
             }
         }
-        rect(renderer, 0, 345, 640, 15, {19, 33, 49, 255});
         std::string status = notice;
         if (status.size() > 60)
             status.resize(60);
-        text(renderer,
-             8,
-             349,
-             help ? status : "ESC / START: PAUSE",
-             behind ? SDL_Color{255, 154, 93, 255} : mint);
+        if (help || screen == Screen::settings)
+            text(renderer, 8, 349, status, behind ? SDL_Color{255, 154, 93, 255} : mint);
         if (help)
             text(renderer,
                  500,

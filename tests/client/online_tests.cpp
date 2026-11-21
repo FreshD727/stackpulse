@@ -12,6 +12,39 @@ stackpulse::net::View snapshot(std::uint64_t revision = 1) {
 }
 } // namespace
 
+TEST_CASE("Lobby actions keep Leave reachable for every member and phase", "[online][ui]") {
+    namespace net = stackpulse::net;
+    namespace client = stackpulse::client;
+    for (const auto phase : {net::Phase::waiting, net::Phase::countdown, net::Phase::results})
+        for (const auto role : {net::Role::player, net::Role::spectator})
+            for (const bool manager : {false, true}) {
+                net::View view;
+                view.phase = phase;
+                view.role = role;
+                view.member_id = 1;
+                view.manager_id = manager ? 1 : 2;
+                const auto actions = client::room_actions(view);
+                REQUIRE_FALSE(actions.empty());
+                REQUIRE(actions.back() == client::RoomAction::leave);
+                const bool can_ready = phase == net::Phase::waiting && role == net::Role::player;
+                const bool can_return = phase == net::Phase::results && manager;
+                REQUIRE(actions.size() == (can_ready || can_return ? 2U : 1U));
+                if (can_ready)
+                    REQUIRE(actions.front() == client::RoomAction::ready);
+                if (can_return)
+                    REQUIRE(actions.front() == client::RoomAction::return_to_lobby);
+            }
+    for (const auto phase : {net::Phase::connecting,
+                             net::Phase::playing,
+                             net::Phase::browsing,
+                             net::Phase::disconnected,
+                             net::Phase::error}) {
+        net::View view;
+        view.phase = phase;
+        REQUIRE(client::room_actions(view).empty());
+    }
+}
+
 TEST_CASE("Online prediction restores authority and replays only stable local inputs", "[online]") {
     namespace sp = stackpulse;
     auto v = snapshot();

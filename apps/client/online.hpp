@@ -4,6 +4,18 @@
 #include <stackpulse/network.hpp>
 
 namespace stackpulse::client {
+enum class RoomAction { ready, return_to_lobby, leave };
+inline std::vector<RoomAction> room_actions(const net::View& view) {
+    std::vector<RoomAction> actions;
+    if (view.phase == net::Phase::waiting && view.role == net::Role::player)
+        actions.push_back(RoomAction::ready);
+    else if (view.phase == net::Phase::results && view.member_id == view.manager_id)
+        actions.push_back(RoomAction::return_to_lobby);
+    if (view.phase == net::Phase::waiting || view.phase == net::Phase::countdown ||
+        view.phase == net::Phase::results)
+        actions.push_back(RoomAction::leave);
+    return actions;
+}
 enum class PlayerStatus { playing, out, disconnected };
 struct LeaderboardEntry {
     std::uint16_t id{};
