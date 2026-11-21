@@ -48,7 +48,7 @@ std::vector<std::uint8_t> encode(const Packet& p) {
         return {};
     Writer w;
     w.put(0x33445053, 4);
-    w.put(2, 1);
+    w.put(3, 1);
     w.put(static_cast<unsigned>(p.tag), 1);
     w.put(p.body.size(), 2);
     w.put(p.session, 8);
@@ -59,16 +59,51 @@ bool decode(std::span<const std::uint8_t> b, Packet& out) {
     if (b.size() < 16 || b.size() > max_packet)
         return false;
     Reader r{b};
-    if (r.get(4) != 0x33445053 || r.get(1) != 2)
+    if (r.get(4) != 0x33445053 || r.get(1) != 3)
         return false;
     auto t = r.get(1), n = r.get(2), s = r.get(8);
-    if (t < 1 || t > 15 || n != b.size() - 16)
+    if (t < 1 || t > 19 || n != b.size() - 16)
         return false;
     Packet p{static_cast<Tag>(t), s, r.data(static_cast<std::size_t>(n))};
     if (!r.done())
         return false;
     out = std::move(p);
     return true;
+}
+bool valid_options(const RoomOptions& o) {
+    auto printable = [](const std::string& s) {
+        return std::all_of(s.begin(), s.end(), [](unsigned char x) { return x >= 32 && x <= 126; });
+    };
+    return !o.name.empty() && o.name.size() <= 24 && o.password.size() <= 32 && printable(o.name) &&
+           printable(o.password) && o.players >= 2 && o.players <= 8 &&
+           static_cast<unsigned>(o.preset) <= 2 && o.start_level <= 29 &&
+           (o.preset != modern::Preset::modern || o.start_level == 0);
+}
+void write_options(Writer& w, const RoomOptions& o, bool secret) {
+    w.put(o.name.size(), 1);
+    w.data({reinterpret_cast<const std::uint8_t*>(o.name.data()), o.name.size()});
+    w.put(o.players, 1);
+    w.put(static_cast<unsigned>(o.preset), 1);
+    w.put(o.start_level, 1);
+    if (secret) {
+        w.put(o.password.size(), 1);
+        w.data({reinterpret_cast<const std::uint8_t*>(o.password.data()), o.password.size()});
+    }
+}
+bool read_options(Reader& r, RoomOptions& o, bool secret) {
+    auto n = r.get(1);
+    auto name = r.data(n);
+    o.name.assign(name.begin(), name.end());
+    o.players = static_cast<std::uint8_t>(r.get(1));
+    o.preset = static_cast<modern::Preset>(r.get(1));
+    o.start_level = static_cast<std::uint8_t>(r.get(1));
+    o.password.clear();
+    if (secret) {
+        auto len = r.get(1);
+        auto password = r.data(len);
+        o.password.assign(password.begin(), password.end());
+    }
+    return r.ok && valid_options(o);
 }
 bool random_bytes(std::span<std::uint8_t> out) {
 #ifdef _WIN32

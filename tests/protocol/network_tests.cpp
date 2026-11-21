@@ -77,7 +77,7 @@ TEST_CASE("Authoritative UDP server expires disconnected players and sends match
     REQUIRE(a.view().phase == net::Phase::error);
     REQUIRE_FALSE(a.view().connected);
 }
-TEST_CASE("Rules incompatibility fails explicitly over actual UDP", "[network][socket]") {
+TEST_CASE("Initial mode hint does not restrict server room selection", "[network][socket]") {
     net::ServerOptions options;
     options.port = 28780;
     net::Server server(options);
@@ -85,8 +85,8 @@ TEST_CASE("Rules incompatibility fails explicitly over actual UDP", "[network][s
     net::Client a, b;
     REQUIRE(a.connect("127.0.0.1", options.port, modern::Preset::modern));
     pump(server, a, b, 40);
-    REQUIRE(a.view().phase == net::Phase::error);
-    REQUIRE_FALSE(a.view().connected);
+    REQUIRE(a.view().connected);
+    REQUIRE(a.view().room.preset == modern::Preset::fusion);
 }
 
 #include <enet/enet.h>
@@ -149,11 +149,17 @@ void pump_raw(net::Server& server, RawPeer& a, net::Client& b, unsigned n) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
-void hello(RawPeer& a, bool recovery = false) {
+void hello(RawPeer& a, bool recovery = false, net::Role role = net::Role::player) {
     net::wire::Writer w;
     w.put(modern::rules_version, 4);
     w.put(static_cast<unsigned>(modern::Preset::fusion), 1);
     w.put(recovery, 1);
+    w.put(static_cast<unsigned>(role), 1);
+    w.put(0, 1);
+    w.put(6, 1);
+    const std::array<std::uint8_t, 6> name{'P', 'l', 'a', 'y', 'e', 'r'};
+    w.data(name);
+    w.put(0, 1);
     a.send({net::wire::Tag::hello, 0, std::move(w.bytes)});
 }
 } // namespace
@@ -234,6 +240,7 @@ TEST_CASE("Raw UDP reconnect rotates credentials and rejects reuse of old token"
     const auto old_token = identity.data(32);
     identity.get(8);
     identity.get(1);
+    identity.get(1);
     REQUIRE(identity.done());
     Writer ready;
     ready.put(1, 1);
@@ -264,6 +271,7 @@ TEST_CASE("Raw UDP reconnect rotates credentials and rejects reuse of old token"
     REQUIRE(rotated.get(8) == match_id);
     const auto new_token = rotated.data(32);
     rotated.get(8);
+    rotated.get(1);
     rotated.get(1);
     REQUIRE(rotated.done());
     REQUIRE(new_token != old_token);
@@ -464,6 +472,7 @@ TEST_CASE("Raw UDP valid recovery migrates a still connected peer", "[network][s
     const auto token = identity.data(32);
     identity.get(8);
     identity.get(1);
+    identity.get(1);
     REQUIRE(identity.done());
     Writer ready;
     ready.put(1, 1);
@@ -493,6 +502,7 @@ TEST_CASE("Raw UDP valid recovery migrates a still connected peer", "[network][s
     REQUIRE(rotated.get(8) == match_id);
     REQUIRE(rotated.data(32) != token);
     rotated.get(8);
+    rotated.get(1);
     rotated.get(1);
     REQUIRE(rotated.done());
     REQUIRE(original.disconnected);
@@ -545,7 +555,8 @@ TEST_CASE("M4 actual UDP admits eight players sixteen late spectators and bounds
     REQUIRE(full.connect("127.0.0.1", o.port, o.preset));
     peers.push_back(&full);
     pump_many(server, peers, 10);
-    REQUIRE(full.view().phase == net::Phase::error);
+    REQUIRE(full.view().phase == net::Phase::browsing);
+    REQUIRE_FALSE(full.view().operation_error.empty());
     peers.pop_back();
     for (auto* c : peers)
         c->set_ready(true);
@@ -559,6 +570,7 @@ TEST_CASE("M4 actual UDP admits eight players sixteen late spectators and bounds
         net::ConnectOptions co;
         co.port = o.port;
         co.room_code = code;
+        co.role = net::Role::spectator;
         REQUIRE(peers.back()->connect(co));
     }
     pump_many(server, peers, 50);
@@ -581,7 +593,8 @@ TEST_CASE("M4 actual UDP admits eight players sixteen late spectators and bounds
     REQUIRE(excess.connect(co));
     peers.push_back(&excess);
     pump_many(server, peers, 30);
-    REQUIRE(excess.view().phase == net::Phase::error);
+    REQUIRE(excess.view().phase == net::Phase::browsing);
+    REQUIRE_FALSE(excess.view().operation_error.empty());
 }
 TEST_CASE("M4 private rooms isolate snapshots and manager transfer allows rematch",
           "[network][socket][rooms]") {
@@ -651,7 +664,7 @@ TEST_CASE("M4 spectator raw input has no player authority", "[network][socket][s
     start(server, a, b, o.port);
     RawPeer spectator(o.port);
     pump_raw(server, spectator, b, 20);
-    hello(spectator);
+    hello(spectator, false, net::Role::spectator);
     pump_raw(server, spectator, b, 25);
     const auto* welcome = spectator.latest(Tag::welcome);
     REQUIRE(welcome);
@@ -853,4 +866,114 @@ TEST_CASE("M4 abandoned terminal rooms reset default and reap private capacity",
     pump(server, a, b, 25);
     REQUIRE(a.view().connected);
     REQUIRE(server.metrics().rooms == 2);
+}
+TEST_CASE("Lobby discovery passwords settings and explicit roles use authoritative room modes",
+          "[network][socket][rooms][issue5]") {
+    net::ServerOptions so;
+    so.port = 28801;
+    net::Server server(so);
+    REQUIRE(server.valid());
+    net::Client manager, guest, observer;
+    net::ConnectOptions co;
+    co.port = so.port;
+    co.browse_only = true;
+    REQUIRE(manager.connect(co));
+    REQUIRE(guest.connect(co));
+    REQUIRE(observer.connect(co));
+    std::vector<net::Client*> peers{&manager, &guest, &observer};
+    pump_many(server, peers, 30);
+    REQUIRE(manager.view().phase == net::Phase::browsing);
+    REQUIRE(manager.view().room_id == 0);
+    REQUIRE(manager.view().rooms.size() == 1);
+    net::RoomOptions room;
+    room.name = "Classic friends";
+    room.password = "private";
+    room.players = 2;
+    room.preset = modern::Preset::classic;
+    room.start_level = 19;
+    manager.create_room(room);
+    pump_many(server, peers, 25);
+    REQUIRE(manager.view().room.preset == modern::Preset::classic);
+    REQUIRE(manager.view().room.password.empty());
+    const auto code = manager.view().room_code;
+    guest.list_rooms();
+    pump_many(server, peers, 15);
+    REQUIRE(guest.view().rooms.size() == 2);
+    auto listed = std::find_if(guest.view().rooms.begin(), guest.view().rooms.end(), [&](auto& r) {
+        return r.code == code;
+    });
+    REQUIRE(listed != guest.view().rooms.end());
+    REQUIRE(listed->password_required);
+    REQUIRE(listed->start_level == 19);
+    guest.join_room(code, "wrong");
+    pump_many(server, peers, 15);
+    REQUIRE(guest.view().connected);
+    REQUIRE(guest.view().room_id == 0);
+    REQUIRE(guest.view().operation_error == "Incorrect password");
+    guest.join_room(code, "private");
+    pump_many(server, peers, 20);
+    REQUIRE(guest.view().room_id == manager.view().room_id);
+    REQUIRE(guest.view().role == net::Role::player);
+    room.start_level = 23;
+    guest.configure_room(room);
+    pump_many(server, peers, 15);
+    REQUIRE_FALSE(guest.view().operation_error.empty());
+    REQUIRE(manager.view().room.start_level == 19);
+    manager.set_ready(true);
+    pump_many(server, peers, 10);
+    auto public_settings = manager.view().room;
+    REQUIRE(public_settings.password.empty());
+    public_settings.start_level = 23;
+    manager.configure_room(public_settings);
+    pump_many(server, peers, 15);
+    REQUIRE(manager.view().room.start_level == 23);
+    REQUIRE_FALSE(manager.view().ready);
+    observer.list_rooms();
+    pump_many(server, peers, 15);
+    auto locked = std::find_if(observer.view().rooms.begin(),
+                               observer.view().rooms.end(),
+                               [&](auto& r) { return r.code == code; });
+    REQUIRE(locked != observer.view().rooms.end());
+    REQUIRE(locked->password_required);
+    observer.join_room(code, "");
+    pump_many(server, peers, 15);
+    REQUIRE(observer.view().operation_error == "Incorrect password");
+    REQUIRE(observer.view().room_id == 0);
+    observer.join_room(code, "private");
+    pump_many(server, peers, 15);
+    REQUIRE(observer.view().phase == net::Phase::browsing);
+    REQUIRE(observer.view().operation_error == "Room full");
+    manager.set_ready(true);
+    guest.set_ready(true);
+    pump_many(server, peers, 210);
+    REQUIRE(manager.view().has_snapshot);
+    REQUIRE(manager.view().authoritative.players.front().board.preset == modern::Preset::classic);
+    observer.join_room(code, "private");
+    pump_many(server, peers, 15);
+    REQUIRE(observer.view().room_id == 0);
+    REQUIRE_FALSE(observer.view().operation_error.empty());
+    observer.join_room(code, "private", net::Role::spectator);
+    pump_many(server, peers, 25);
+    REQUIRE(observer.view().role == net::Role::spectator);
+    REQUIRE(observer.view().has_snapshot);
+    room.start_level = 0;
+    manager.configure_room(room);
+    pump_many(server, peers, 15);
+    REQUIRE_FALSE(manager.view().operation_error.empty());
+    observer.leave_room();
+    pump_many(server, peers, 15);
+    REQUIRE(observer.view().phase == net::Phase::browsing);
+    room.name = "Modern";
+    room.password.clear();
+    room.preset = modern::Preset::modern;
+    observer.create_room(room);
+    pump_many(server, peers, 20);
+    REQUIRE(observer.view().room.preset == modern::Preset::modern);
+    observer.list_rooms();
+    pump_many(server, peers, 15);
+    REQUIRE(observer.view().rooms.size() == 3);
+    for (auto mode : {modern::Preset::fusion, modern::Preset::modern, modern::Preset::classic})
+        REQUIRE(std::any_of(observer.view().rooms.begin(),
+                            observer.view().rooms.end(),
+                            [&](auto& r) { return r.preset == mode; }));
 }

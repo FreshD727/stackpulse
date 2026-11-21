@@ -159,7 +159,7 @@ def main():
     parser.add_argument("--bin", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("out/network-matrix"))
     parser.add_argument("--case", choices=["all", *CASES], default="all")
-    parser.add_argument("--mode", choices=["fusion", "modern"], default="modern")
+    parser.add_argument("--mode", choices=["classic", "fusion", "modern"], default="modern")
     parser.add_argument("--ticks", type=int, default=2400)
     parser.add_argument("--timeout", type=int, default=90)
     args = parser.parse_args()

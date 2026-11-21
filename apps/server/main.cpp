@@ -15,6 +15,8 @@ int main(int argc, char** argv) {
             std::string_view mode = argv[++i];
             if (mode == "fusion")
                 options.preset = stackpulse::modern::Preset::fusion;
+            else if (mode == "classic")
+                options.preset = stackpulse::modern::Preset::classic;
             else if (mode == "modern")
                 options.preset = stackpulse::modern::Preset::modern;
             else
@@ -53,11 +55,13 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s\n", server.error().c_str());
         return 1;
     }
-    std::printf("Stackpulse rooms UDP %s:%u rules v%u %s\n",
+    std::printf("Stackpulse rooms UDP %s:%u rules v%u all room modes (default %s)\n",
                 options.bind.c_str(),
                 options.port,
                 stackpulse::modern::rules_version,
-                options.preset == stackpulse::modern::Preset::fusion ? "fusion" : "modern");
+                options.preset == stackpulse::modern::Preset::fusion    ? "fusion"
+                : options.preset == stackpulse::modern::Preset::classic ? "classic"
+                                                                        : "modern");
     std::fflush(stdout);
     const auto start = std::chrono::steady_clock::now();
     std::uint64_t ticks = 0;

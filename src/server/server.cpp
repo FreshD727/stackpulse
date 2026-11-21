@@ -44,6 +44,7 @@ struct Server::Impl {
         View view;
         std::map<std::uint16_t, Slot> slots;
         std::uint16_t next_member{1};
+        std::string password;
     };
     ServerOptions options;
     ENetHost* host{};
@@ -97,7 +98,7 @@ struct Server::Impl {
         if (host)
             enet_host_destroy(host);
     }
-    Room* make_room() {
+    Room* make_room(const RoomOptions* settings = nullptr) {
         if (rooms.size() >= options.rooms)
             return nullptr;
         const auto id = random_id();
@@ -107,7 +108,15 @@ struct Server::Impl {
         r.view.phase = Phase::waiting;
         r.view.room_id = id;
         r.view.match_id = random_id();
-        r.view.player_limit = options.players;
+        r.view.room.players = options.players;
+        r.view.room.preset = options.preset;
+        r.view.room.name = "Default lobby";
+        if (settings) {
+            r.view.room = *settings;
+            r.password = settings->password;
+            r.view.room.password.clear();
+        }
+        r.view.player_limit = r.view.room.players;
         r.view.spectator_limit = options.spectators;
         static constexpr char hex[] = "0123456789ABCDEF";
         for (unsigned i = 0; i < 16; ++i)
@@ -144,11 +153,12 @@ struct Server::Impl {
                 w.put(v.room_id, 8);
                 w.put(v.match_id, 8);
                 w.put(v.manager_id, 2);
-                w.put(options.players, 1);
+                w.put(v.player_limit, 1);
                 w.put(options.spectators, 1);
                 w.put(v.room_code.size(), 1);
                 w.data({reinterpret_cast<const std::uint8_t*>(v.room_code.data()),
                         v.room_code.size()});
+                write_options(w, v.room, false);
                 w.put(v.members.size(), 1);
                 for (auto& m : v.members) {
                     w.put(m.id, 2);
@@ -197,6 +207,35 @@ struct Server::Impl {
         c.result_sent = false;
         lobby(*r);
     }
+    void operation_error(ENetPeer* peer, Connection& c, const char* text) {
+        if (!c.room)
+            welcome(peer, c);
+        send(peer,
+             {Tag::operation_error,
+              c.session,
+              std::vector<std::uint8_t>(text, text + std::char_traits<char>::length(text))});
+        directory(peer, c);
+    }
+    void directory(ENetPeer* peer, Connection& c) {
+        Writer w;
+        w.put(rooms.size(), 1);
+        for (auto& [id, r] : rooms) {
+            refresh(r);
+            w.put(id, 8);
+            w.put(r.view.room_code.size(), 1);
+            w.data({reinterpret_cast<const std::uint8_t*>(r.view.room_code.data()),
+                    r.view.room_code.size()});
+            write_options(w, r.view.room, false);
+            w.put(!r.password.empty(), 1);
+            unsigned players = 0, spectators = 0;
+            for (auto& m : r.view.members)
+                m.role == Role::player ? ++players : ++spectators;
+            w.put(players, 1);
+            w.put(spectators, 1);
+            w.put(static_cast<unsigned>(r.view.phase), 1);
+        }
+        send(peer, {Tag::directory, c.session, std::move(w.bytes)});
+    }
     void reject(ENetPeer* peer, const char* detail) {
         auto i = connections.find(peer);
         send(peer,
@@ -227,16 +266,22 @@ struct Server::Impl {
         w.data(r && c.player ? r->slots.at(c.player).credential : empty);
         w.put(c.room, 8);
         w.put(static_cast<unsigned>(c.role), 1);
+        w.put(r ? static_cast<unsigned>(r->view.room.preset) : 0, 1);
         send(peer, {Tag::welcome, c.session, std::move(w.bytes)});
     }
     bool join(ENetPeer* peer, Connection& c, Room& r, Role requested) {
-        Role role = r.view.phase == Phase::waiting ? requested : Role::spectator;
+        Role role = requested;
+        if (role == Role::player && r.view.phase != Phase::waiting) {
+            operation_error(peer, c, "Match started; choose Watch to spectate");
+            return false;
+        }
         unsigned n = 0;
         for (auto& [id, s] : r.slots)
             if (s.role == role)
                 ++n;
-        if (n >= (role == Role::player ? options.players : options.spectators) || !r.next_member) {
-            reject(peer, "Room full");
+        if (n >= (role == Role::player ? r.view.player_limit : options.spectators) ||
+            !r.next_member) {
+            operation_error(peer, c, "Room full");
             return false;
         }
         Slot s;
@@ -268,7 +313,7 @@ struct Server::Impl {
         Writer w;
         w.put(r->view.match_id, 8);
         w.put(modern::rules_version, 4);
-        w.put(static_cast<unsigned>(options.preset), 1);
+        w.put(static_cast<unsigned>(r->view.room.preset), 1);
         w.put(match::state_hash(r->view.authoritative), 8);
         w.data(match::canonical_bytes(r->view.authoritative));
         auto id = c.next_transfer++;
@@ -340,8 +385,9 @@ struct Server::Impl {
                 c.name.assign(name.begin(), name.end());
                 code.assign(b.begin(), b.end());
             }
+            const auto browse = rd.offset < rd.bytes.size() ? rd.get(1) : 0;
             if (c.hello || p.session || !rd.done() || version != modern::rules_version ||
-                preset != static_cast<unsigned>(options.preset) || recovery > 1) {
+                preset > 2 || recovery > 1 || browse > 1) {
                 reject(peer, "Incompatible rules or handshake");
                 return;
             }
@@ -356,6 +402,11 @@ struct Server::Impl {
                 welcome(peer, c);
                 return;
             }
+            if (browse) {
+                welcome(peer, c);
+                directory(peer, c);
+                return;
+            }
             Room* target = nullptr;
             if (create)
                 target = make_room();
@@ -367,6 +418,11 @@ struct Server::Impl {
                         target = &r;
             if (!target) {
                 reject(peer, "Room unavailable");
+                return;
+            }
+            if (!target->password.empty()) {
+                operation_error(
+                    peer, c, "Password required; select the lobby and enter its password");
                 return;
             }
             join(peer, c, *target, role);
@@ -428,30 +484,45 @@ struct Server::Impl {
             snapshot(peer, c);
             return;
         }
+        if (p.tag == Tag::list_rooms) {
+            if (!rd.done()) {
+                reject(peer, "Invalid directory request");
+                return;
+            }
+            directory(peer, c);
+            return;
+        }
         if (p.tag == Tag::create_room || p.tag == Tag::join_room) {
             Role role = Role::player;
             Room* target = nullptr;
             if (p.tag == Tag::create_room) {
-                if (!rd.done()) {
+                RoomOptions settings;
+                if (!read_options(rd, settings) || !rd.done()) {
                     reject(peer, "Invalid create");
                     return;
                 }
-                target = make_room();
+                target = make_room(&settings);
             } else {
                 auto v = rd.get(1), n = rd.get(1);
                 auto b = rd.data(n);
-                if (!rd.done() || v > 1 || n > 16) {
+                auto len = rd.get(1);
+                auto secret = rd.data(len);
+                if (!rd.done() || v > 1 || n > 16 || len > 32) {
                     reject(peer, "Invalid join");
                     return;
                 }
                 role = static_cast<Role>(v);
-                std::string code(b.begin(), b.end());
+                std::string code(b.begin(), b.end()), password(secret.begin(), secret.end());
                 for (auto& [id, r] : rooms)
                     if (r.view.room_code == code)
                         target = &r;
+                if (target && target->password != password) {
+                    operation_error(peer, c, "Incorrect password");
+                    return;
+                }
             }
             if (!target) {
-                reject(peer, "Room unavailable");
+                operation_error(peer, c, "Room unavailable");
                 return;
             }
             join(peer, c, *target, role);
@@ -471,7 +542,34 @@ struct Server::Impl {
             return;
         auto& v = r->view;
         auto& s = r->slots.at(c.player);
-        if (p.tag == Tag::snapshot_ack) {
+        if (p.tag == Tag::configure_room) {
+            RoomOptions settings;
+            if (!read_options(rd, settings) || !rd.done()) {
+                reject(peer, "Invalid room settings");
+                return;
+            }
+            refresh(*r);
+            unsigned players = 0;
+            for (auto& [id, member] : r->slots)
+                if (member.role == Role::player)
+                    ++players;
+            if (v.phase != Phase::waiting || c.player != v.manager_id ||
+                players > settings.players) {
+                operation_error(
+                    peer, c, "Only the waiting lobby manager can change valid settings");
+                return;
+            }
+            // Public settings deliberately omit the secret. An empty configure
+            // password means retain it, so adjusting level cannot unlock a room.
+            if (!settings.password.empty())
+                r->password = settings.password;
+            settings.password.clear();
+            v.room = settings;
+            v.player_limit = settings.players;
+            for (auto& [id, member] : r->slots)
+                member.ready = false;
+            lobby(*r);
+        } else if (p.tag == Tag::snapshot_ack) {
             auto id = rd.get(4);
             if (!rd.done()) {
                 reject(peer, "Invalid snapshot ack");
@@ -594,9 +692,11 @@ struct Server::Impl {
                         if (s.role == Role::player)
                             ids.push_back(id);
                     v.authoritative =
-                        options.initial_state && ids == std::vector<std::uint16_t>{1, 2}
+                        options.initial_state && v.room.preset == options.preset &&
+                                v.room.start_level == 0 && ids == std::vector<std::uint16_t>{1, 2}
                             ? *options.initial_state
-                            : match::initial_state(ids, options.seed, options.preset);
+                            : match::initial_state(
+                                  ids, options.seed, v.room.preset, v.room.start_level);
                     v.has_snapshot = true;
                     v.phase = Phase::playing;
                     lobby(r);

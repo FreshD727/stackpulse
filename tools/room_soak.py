@@ -12,7 +12,7 @@ def main():
     parser.add_argument('--binary', type=Path, required=True)
     parser.add_argument('--seconds', type=int, default=1800)
     parser.add_argument('--port', type=int, default=28992)
-    parser.add_argument('--mode', choices=('fusion', 'modern'), default='fusion')
+    parser.add_argument('--mode', choices=('classic', 'fusion', 'modern'), default='fusion')
     parser.add_argument('--output', type=Path, default=Path('out/soak/room-soak.json'))
     args = parser.parse_args()
     if args.seconds < 1:

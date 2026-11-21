@@ -115,8 +115,8 @@ struct Client::Impl {
         if (p.tag == Tag::welcome) {
             const auto id = r.get(2), match = r.get(8);
             auto token = r.data(32);
-            const auto room_id = r.get(8), role = r.get(1);
-            if (!r.done() || !p.session || id > 65535 || role > 1 || !match ||
+            const auto room_id = r.get(8), role = r.get(1), mode = r.get(1);
+            if (!r.done() || !p.session || id > 65535 || role > 1 || mode > 2 || !match ||
                 (session && p.session != session)) {
                 fail("Invalid welcome");
                 return;
@@ -139,6 +139,8 @@ struct Client::Impl {
                 view.members.clear();
                 view.room_code.clear();
             }
+            preset = static_cast<modern::Preset>(mode);
+            view.room.preset = preset;
             view.room_id = room_id;
             view.match_id = match;
             view.member_id = static_cast<std::uint16_t>(id);
@@ -149,20 +151,60 @@ struct Client::Impl {
             std::copy(token.begin(), token.end(), credential.begin());
             recovering = false;
             view.connected = true;
-            view.phase = Phase::waiting;
+            view.phase = room_id ? Phase::waiting : Phase::browsing;
             view.detail = "Connected";
             return;
         }
         if (!session || p.session != session || !view.connected)
             return;
-        if (p.tag == Tag::lobby) {
+        if (p.tag == Tag::operation_error) {
+            if (p.body.empty() || p.body.size() > 128) {
+                fail("Invalid operation error");
+                return;
+            }
+            view.operation_error.assign(p.body.begin(), p.body.end());
+            ++view.operation_revision;
+        } else if (p.tag == Tag::directory) {
+            auto count = r.get(1);
+            std::vector<RoomInfo> rooms;
+            bool valid = count <= 8;
+            for (std::uint64_t i = 0; i < count && valid; ++i) {
+                RoomInfo info;
+                info.id = r.get(8);
+                auto n = r.get(1);
+                auto code = r.data(n);
+                RoomOptions room_options;
+                valid = read_options(r, room_options, false) && info.id && n == 16;
+                info.code.assign(code.begin(), code.end());
+                info.name = room_options.name;
+                info.preset = room_options.preset;
+                info.start_level = room_options.start_level;
+                info.capacity = room_options.players;
+                auto secret = r.get(1), players = r.get(1), spectators = r.get(1), phase = r.get(1);
+                valid = valid && secret <= 1 && players <= info.capacity && spectators <= 16 &&
+                        phase >= static_cast<unsigned>(Phase::waiting) &&
+                        phase <= static_cast<unsigned>(Phase::results);
+                info.password_required = secret != 0;
+                info.players = static_cast<std::uint8_t>(players);
+                info.spectators = static_cast<std::uint8_t>(spectators);
+                info.state = static_cast<Phase>(phase);
+                rooms.push_back(std::move(info));
+            }
+            if (!valid || !r.done()) {
+                fail("Invalid lobby directory");
+                return;
+            }
+            view.rooms = std::move(rooms);
+        } else if (p.tag == Tag::lobby) {
             const auto phase = r.get(1), countdown = r.get(4), tick = r.get(8), room = r.get(8),
                        match = r.get(8), manager = r.get(2), players = r.get(1),
                        spectators = r.get(1), len = r.get(1);
             auto code = r.data(len);
+            RoomOptions settings;
+            const bool valid_settings = read_options(r, settings, false);
             auto count = r.get(1);
             std::vector<Member> members;
-            bool valid = phase >= static_cast<unsigned>(Phase::waiting) &&
+            bool valid = valid_settings && phase >= static_cast<unsigned>(Phase::waiting) &&
                          phase <= static_cast<unsigned>(Phase::results) && countdown <= 180 &&
                          room == view.room_id && match == match_id && players >= 2 &&
                          players <= 8 && spectators <= 16 && len <= 16 && count <= 24;
@@ -190,6 +232,8 @@ struct Client::Impl {
                 fail("Invalid lobby");
                 return;
             }
+            view.room = settings;
+            preset = settings.preset;
             view.countdown = static_cast<std::uint32_t>(countdown);
             view.server_tick = std::max(view.server_tick, tick);
             view.manager_id = static_cast<std::uint16_t>(manager);
@@ -279,6 +323,7 @@ struct Client::Impl {
                 w.put(options.room_code.size(), 1);
                 w.data({reinterpret_cast<const std::uint8_t*>(options.room_code.data()),
                         options.room_code.size()});
+                w.put(options.browse_only, 1);
                 send(peer, {Tag::hello, 0, std::move(w.bytes)});
             } else if (event.type == ENET_EVENT_TYPE_RECEIVE) {
                 if (view.phase != Phase::error)
@@ -329,16 +374,44 @@ bool Client::connect(const std::string& host, std::uint16_t port, modern::Preset
     return connect(options);
 }
 void Client::create_room() {
+    RoomOptions options;
+    options.preset = impl_->preset;
+    create_room(options);
+}
+void Client::create_room(const RoomOptions& options) {
+    if (!impl_->view.connected || !valid_options(options))
+        return;
+    impl_->view.operation_error.clear();
+    Writer w;
+    write_options(w, options);
+    send(impl_->peer, {Tag::create_room, impl_->session, std::move(w.bytes)});
+}
+void Client::configure_room(const RoomOptions& options) {
+    if (!impl_->view.connected || !valid_options(options))
+        return;
+    impl_->view.operation_error.clear();
+    Writer w;
+    write_options(w, options);
+    send(impl_->peer, {Tag::configure_room, impl_->session, std::move(w.bytes)});
+}
+void Client::list_rooms() {
     if (impl_->view.connected)
-        send(impl_->peer, {Tag::create_room, impl_->session, {}});
+        send(impl_->peer, {Tag::list_rooms, impl_->session, {}});
 }
 void Client::join_room(const std::string& code, Role role) {
-    if (!impl_->view.connected || code.size() > 16 || static_cast<unsigned>(role) > 1)
+    join_room(code, "", role);
+}
+void Client::join_room(const std::string& code, const std::string& password, Role role) {
+    if (!impl_->view.connected || code.size() > 16 || password.size() > 32 ||
+        static_cast<unsigned>(role) > 1)
         return;
+    impl_->view.operation_error.clear();
     Writer w;
     w.put(static_cast<unsigned>(role), 1);
     w.put(code.size(), 1);
     w.data({reinterpret_cast<const std::uint8_t*>(code.data()), code.size()});
+    w.put(password.size(), 1);
+    w.data({reinterpret_cast<const std::uint8_t*>(password.data()), password.size()});
     send(impl_->peer, {Tag::join_room, impl_->session, std::move(w.bytes)});
 }
 void Client::leave_room() {

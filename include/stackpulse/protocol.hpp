@@ -22,7 +22,11 @@ enum class Tag : std::uint8_t {
     join_room,
     leave_room,
     return_lobby,
-    featured
+    featured,
+    list_rooms,
+    directory,
+    configure_room,
+    operation_error
 };
 struct Packet {
     Tag tag{};
@@ -44,6 +48,9 @@ struct Reader {
 };
 std::vector<std::uint8_t> encode(const Packet&);
 bool decode(std::span<const std::uint8_t>, Packet&);
+void write_options(Writer&, const RoomOptions&, bool secret = true);
+bool read_options(Reader&, RoomOptions&, bool secret = true);
+bool valid_options(const RoomOptions&);
 bool random_bytes(std::span<std::uint8_t>);
 std::uint64_t random_id();
 struct Assembly {

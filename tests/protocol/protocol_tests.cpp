@@ -3,7 +3,7 @@
 #include <stackpulse/protocol.hpp>
 using namespace stackpulse::net;
 using namespace stackpulse::net::wire;
-TEST_CASE("SPD3 revision 2 envelope validates exact bounded lengths and tags", "[network][codec]") {
+TEST_CASE("SPD3 revision 3 envelope validates exact bounded lengths and tags", "[network][codec]") {
     Packet p{Tag::hello, 0, {5, 0, 0, 0, 0, 0}}, out;
     auto bytes = encode(p);
     REQUIRE(bytes.size() == 22);
@@ -91,4 +91,37 @@ TEST_CASE("M4 codec rejects old revision and assembles maximum eight-board objec
         REQUIRE(a.add(r, 1, complete));
     }
     REQUIRE(complete == object);
+}
+TEST_CASE("Revision three room settings enforce bounds and public serialization excludes secrets",
+          "[network][codec][rooms]") {
+    RoomOptions options;
+    options.name = "Friends";
+    options.password = "secret";
+    options.players = 2;
+    options.preset = stackpulse::modern::Preset::classic;
+    options.start_level = 29;
+    REQUIRE(valid_options(options));
+    Writer public_bytes;
+    write_options(public_bytes, options, false);
+    Reader public_reader{public_bytes.bytes};
+    RoomOptions decoded;
+    REQUIRE(read_options(public_reader, decoded, false));
+    REQUIRE(public_reader.done());
+    REQUIRE(decoded.password.empty());
+    REQUIRE(decoded.start_level == 29);
+    Writer private_bytes;
+    write_options(private_bytes, options);
+    Reader private_reader{private_bytes.bytes};
+    REQUIRE(read_options(private_reader, decoded));
+    REQUIRE(private_reader.done());
+    REQUIRE(decoded.password == "secret");
+    options.preset = stackpulse::modern::Preset::modern;
+    REQUIRE_FALSE(valid_options(options));
+    options.start_level = 0;
+    options.players = 1;
+    REQUIRE_FALSE(valid_options(options));
+    auto bytes = encode({Tag::list_rooms, 1, {}});
+    Packet out;
+    bytes[4] = 2;
+    REQUIRE_FALSE(decode(bytes, out));
 }

@@ -15,9 +15,24 @@ enum class Phase : std::uint8_t {
     playing,
     results,
     disconnected,
-    error
+    error,
+    browsing
 };
 enum class Role : std::uint8_t { player, spectator };
+struct RoomOptions {
+    std::string name{"Lobby"}, password;
+    std::uint8_t players{8};
+    modern::Preset preset{modern::Preset::fusion};
+    std::uint8_t start_level{};
+};
+struct RoomInfo {
+    std::uint64_t id{};
+    std::string code, name;
+    bool password_required{};
+    modern::Preset preset{modern::Preset::fusion};
+    std::uint8_t start_level{}, players{}, capacity{}, spectators{};
+    Phase state{Phase::waiting};
+};
 struct ConnectOptions {
     std::string host{"127.0.0.1"};
     std::uint16_t port{default_port};
@@ -25,7 +40,7 @@ struct ConnectOptions {
     std::string name{"Player"};
     Role role{Role::player};
     std::string room_code;
-    bool create_room{};
+    bool create_room{}, browse_only{};
 };
 struct Member {
     std::uint16_t id{}, player{};
@@ -47,6 +62,10 @@ struct View {
     std::string room_code;
     std::uint8_t player_limit{}, spectator_limit{};
     std::vector<Member> members;
+    RoomOptions room;
+    std::vector<RoomInfo> rooms;
+    std::string operation_error;
+    std::uint64_t operation_revision{};
     // Match simulation boundary (next input tick), never the room countdown clock.
     // accepted_through is the simulated boundary: frames < it are irrevocably past,
     // not the highest future frame received. Revision strictly increases per Client
@@ -66,6 +85,10 @@ class Client {
     Client& operator=(const Client&) = delete;
     bool connect(const ConnectOptions&);
     void create_room();
+    void create_room(const RoomOptions&);
+    void configure_room(const RoomOptions&);
+    void list_rooms();
+    void join_room(const std::string& code, const std::string& password, Role role = Role::player);
     void join_room(const std::string& code, Role role = Role::player);
     void leave_room();
     void return_to_lobby();

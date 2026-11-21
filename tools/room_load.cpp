@@ -57,9 +57,11 @@ int main(int argc, char** argv) {
             output = argv[++i];
         else if (arg == "--mode" && i + 1 < argc) {
             const std::string_view mode = argv[++i];
-            if (mode != "fusion" && mode != "modern")
+            if (mode != "classic" && mode != "fusion" && mode != "modern")
                 return 2;
-            preset = mode == "fusion" ? modern::Preset::fusion : modern::Preset::modern;
+            preset = mode == "classic"  ? modern::Preset::classic
+                     : mode == "fusion" ? modern::Preset::fusion
+                                        : modern::Preset::modern;
         } else if ((arg == "--seconds" || arg == "--port") && i + 1 < argc) {
             const std::string_view value = argv[++i];
             unsigned parsed{};
@@ -151,7 +153,7 @@ int main(int argc, char** argv) {
                     const auto tick = authority.authoritative.tick + 3;
                     if (frames.empty() || frames.back().tick < tick) {
                         const auto held =
-                            modern::down |
+                            (tick % 4 < 2 ? std::uint32_t(modern::down) : 0u) |
                             (preset == modern::Preset::modern && tick % 8 == 0 ? modern::hard_drop
                                                                                : 0u);
                         frames.push_back({tick, ++sequences[i], held});
