@@ -16,7 +16,7 @@ One server supports Classic, Fusion and Modern lobbies together. The lobby suppl
 
 ## Presentation
 
-Normal gameplay hides diagnostic counters and extended control hints; F1 reveals them. NEXT is directly right of the main board, followed by opponents. The left leaderboard sorts scores descending, with stable player IDs breaking ties. OUT and DISCONNECTED use distinct text and colors. Opponent headings include stable player IDs so truncated names remain distinguishable. Lobby forms omit irrelevant gameplay headers.
+Normal gameplay hides diagnostic counters and extended control hints; F1 reveals them. NEXT is directly right of the main board, followed by opponents. The left leaderboard sorts scores descending, with stable player IDs breaking ties. OUT and DISCONNECTED use distinct text and colors. Opponent headings include stable player IDs so truncated names remain distinguishable. Lobby forms omit irrelevant gameplay headers. Results show each player's score and final status instead of stale readiness labels.
 
 ## Compatibility
 

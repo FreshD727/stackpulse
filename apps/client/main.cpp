@@ -972,6 +972,19 @@ int run_online(SDL_Renderer* renderer,
                      ink);
                 std::string state =
                     member.connected ? (member.ready ? "READY" : "WAITING") : "RECONNECTING";
+                if (view.phase == net::Phase::results) {
+                    const auto entries = client::leaderboard(view);
+                    const auto entry =
+                        std::find_if(entries.begin(), entries.end(), [&](const auto& e) {
+                            return e.id == member.player;
+                        });
+                    if (entry != entries.end())
+                        state =
+                            number(entry->score) + " / " +
+                            (entry->status == client::PlayerStatus::disconnected ? "DISCONNECTED"
+                             : entry->status == client::PlayerStatus::out        ? "OUT"
+                                                                                 : "WINNER");
+                }
                 if (member.id == view.manager_id)
                     state += " / MANAGER";
                 text(renderer, x + 16, y + 13, state, muted);
@@ -986,7 +999,8 @@ int run_online(SDL_Renderer* renderer,
             text(renderer,
                  32,
                  298,
-                 preset != modern::Preset::modern
+                 view.phase == net::Phase::results ? "MATCH COMPLETE"
+                 : preset != modern::Preset::modern
                      ? "START LEVEL " + number(view.room.start_level) +
                            (view.member_id == view.manager_id ? " / LEFT-RIGHT CHANGE"
                                                               : " / MANAGER SETS LEVEL")
