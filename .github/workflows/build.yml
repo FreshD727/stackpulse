@@ -45,6 +45,6 @@ jobs:
           python -m pip install jsonschema==4.23.0
           python tools/check_contracts.py
       - name: Offline core configure
-        run: cmake -S . -B out/offline -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+        run: cmake -S . -B out/offline -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DSTACKPULSE_BUILD_NETWORK=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
       - name: Offline core build
         run: cmake --build out/offline --config Release --parallel 4

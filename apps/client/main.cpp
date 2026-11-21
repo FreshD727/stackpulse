@@ -1,4 +1,7 @@
 #include "audio.hpp"
+#ifdef STACKPULSE_NETWORK
+#include "online.hpp"
+#endif
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 #include <algorithm>
@@ -138,6 +141,404 @@ void block(SDL_Renderer* r,
 std::string number(std::uint64_t value) {
     return std::to_string(value);
 }
+
+#ifdef STACKPULSE_NETWORK
+int run_online(SDL_Renderer* renderer,
+               const Settings& settings,
+               ClientAudio& audio,
+               const std::string& host,
+               std::uint16_t port,
+               modern::Preset preset,
+               bool bot,
+               std::uint64_t exit_ticks,
+               const std::filesystem::path& capture_path = {}) {
+    namespace net = stackpulse::net;
+    net::Client connection;
+    client::OnlinePrediction prediction;
+    if (!connection.connect(host, port, preset)) {
+        std::fprintf(stderr, "Online connection: %s\n", connection.view().detail.c_str());
+        return 1;
+    }
+    in::Adapter input;
+    std::map<SDL_JoystickID, Pad> pads;
+    auto open_pad = [&](SDL_JoystickID id) {
+        if (!pads.contains(id))
+            if (auto* handle = SDL_OpenGamepad(id))
+                pads.emplace(id, Pad{handle, {}});
+    };
+    int count = 0;
+    auto* ids = SDL_GetGamepads(&count);
+    for (int i = 0; i < count; ++i)
+        open_pad(ids[i]);
+    SDL_free(ids);
+    auto boundary = SDL_GetTicksNS();
+    auto next_tick = boundary + 1'000'000'000 / 60;
+    auto started = boundary;
+    std::uint64_t result_time = 0, snapshot_time = boundary, clock_tick = 0;
+    std::uint64_t previous_revision = 0;
+    bool running = true, focused = true, overlay = false, terminal = false,
+         quit_application = false, ready_requested = false;
+    auto release = [&]() {
+        input.release_all(std::max(SDL_GetTicksNS(), boundary + 1));
+        for (auto& [id, pad] : pads) {
+            (void)id;
+            for (auto& axis : pad.axes)
+                axis.reset();
+        }
+    };
+    auto action = [&](int code, bool pad) -> std::optional<in::Action> {
+        const auto& bindings = pad ? settings.buttons : settings.keys;
+        for (std::size_t i = 0; i < bindings.size(); ++i)
+            if (bindings[i] == code)
+                return actions[i];
+        return {};
+    };
+    auto transition = [&](std::uint64_t when,
+                          in::Device device,
+                          std::uint32_t code,
+                          in::Action logical,
+                          bool down) {
+        input.push({std::max(when, boundary + 1), device, code, logical, down});
+    };
+    auto draw_board = [&](const modern::State& board,
+                          float bx,
+                          float by,
+                          float cell,
+                          bool local = false) {
+        rect(renderer, bx - 3, by - 3, cell * 10 + 6, cell * 20 + 6, {47, 67, 89, 255});
+        rect(renderer, bx, by, cell * 10, cell * 20, {12, 22, 35, 255});
+        const auto speed = modern::gravity_interval(board);
+        for (int y = 0; y < 20; ++y)
+            for (int x = 0; x < 10; ++x) {
+                rect(renderer, bx + x * cell, by + y * cell, cell - 1, cell - 1, {17, 29, 44, 255});
+                auto value = board.board[static_cast<std::size_t>((y + 20) * 10 + x)];
+                if (value)
+                    block(renderer,
+                          bx + x * cell,
+                          by + y * cell,
+                          client::classic_palette_piece(
+                              static_cast<modern::Piece>(value <= 7 ? value - 1 : 0)),
+                          speed,
+                          cell);
+            }
+        if (local && board.preset == modern::Preset::modern && !board.game_over) {
+            color(renderer, {94, 123, 149, 255});
+            for (const auto c : modern::cells(modern::ghost(board)))
+                if (c.y >= 0 && c.y < 20) {
+                    SDL_FRect outline{bx + c.x * cell + 2, by + c.y * cell + 2, cell - 4, cell - 4};
+                    SDL_RenderRect(renderer, &outline);
+                }
+        }
+        if (!board.game_over)
+            for (auto c : modern::cells(board.active))
+                if (c.y >= 0 && c.y < 20)
+                    block(renderer,
+                          bx + c.x * cell,
+                          by + c.y * cell,
+                          client::classic_palette_piece(board.active.piece),
+                          speed,
+                          cell);
+    };
+    while (running) {
+        connection.poll();
+        const auto now = SDL_GetTicksNS();
+        const auto& view = connection.view();
+        if (view.snapshot_revision != previous_revision && view.has_snapshot) {
+            if (prediction.apply(view)) {
+                previous_revision = view.snapshot_revision;
+                snapshot_time = now;
+                clock_tick = view.server_tick;
+            }
+        }
+        if (bot && view.phase == net::Phase::waiting && !view.ready && !ready_requested) {
+            connection.set_ready(true);
+            ready_requested = true;
+        }
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (event.type == SDL_EVENT_QUIT) {
+                running = false;
+                quit_application = true;
+            } else if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
+                focused = false;
+                release();
+            } else if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED)
+                focused = true;
+            else if (event.type == SDL_EVENT_GAMEPAD_ADDED)
+                open_pad(event.gdevice.which);
+            else if (event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+                input.release_device(std::max(event.gdevice.timestamp, boundary + 1),
+                                     event.gdevice.which);
+                if (auto it = pads.find(event.gdevice.which); it != pads.end()) {
+                    SDL_CloseGamepad(it->second.handle);
+                    pads.erase(it);
+                }
+            } else if (event.type == SDL_EVENT_KEYBOARD_REMOVED) {
+                input.release_device(std::max(event.kdevice.timestamp, boundary + 1),
+                                     keyboard | event.kdevice.which);
+            } else if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP ||
+                       event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                       event.type == SDL_EVENT_GAMEPAD_BUTTON_UP) {
+                const bool pad = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
+                                 event.type == SDL_EVENT_GAMEPAD_BUTTON_UP;
+                const bool down = pad ? event.gbutton.down : event.key.down;
+                const int code = pad ? event.gbutton.button : event.key.scancode;
+                if ((!pad && event.key.repeat) || (!focused && !bot))
+                    continue;
+                const auto logical = action(code, pad);
+                if (down) {
+                    if ((!pad && code == SDL_SCANCODE_F10) ||
+                        (pad && code == SDL_GAMEPAD_BUTTON_BACK)) {
+                        running = false;
+                        release();
+                        continue;
+                    }
+                    if (!pad && code == SDL_SCANCODE_F9) {
+                        release();
+                        connection.reconnect();
+                        continue;
+                    }
+                    if ((!pad && code == SDL_SCANCODE_RETURN) ||
+                        (pad && code == SDL_GAMEPAD_BUTTON_SOUTH &&
+                         view.phase == net::Phase::waiting)) {
+                        if (view.phase == net::Phase::waiting)
+                            connection.set_ready(!view.ready);
+                    }
+                    if (logical == in::Action::pause) {
+                        overlay = !overlay;
+                        release();
+                        continue;
+                    }
+                }
+                if (logical && *logical != in::Action::pause && !overlay)
+                    transition(pad ? event.gbutton.timestamp : event.key.timestamp,
+                               pad ? event.gbutton.which : keyboard | event.key.which,
+                               static_cast<std::uint32_t>(code),
+                               *logical,
+                               down);
+            } else if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION && settings.sticks && focused &&
+                       !overlay && event.gaxis.axis <= SDL_GAMEPAD_AXIS_LEFTY) {
+                if (auto it = pads.find(event.gaxis.which); it != pads.end()) {
+                    const int direction = it->second.axes[event.gaxis.axis].update(
+                        static_cast<float>(event.gaxis.value) / 32768.F);
+                    if (event.gaxis.axis == SDL_GAMEPAD_AXIS_LEFTX) {
+                        transition(event.gaxis.timestamp,
+                                   event.gaxis.which,
+                                   100,
+                                   in::Action::left,
+                                   direction == -1);
+                        transition(event.gaxis.timestamp,
+                                   event.gaxis.which,
+                                   101,
+                                   in::Action::right,
+                                   direction == 1);
+                    } else
+                        transition(event.gaxis.timestamp,
+                                   event.gaxis.which,
+                                   102,
+                                   in::Action::down,
+                                   direction == 1);
+                }
+            }
+        }
+        audio.set_playing(view.phase == net::Phase::playing && !overlay && (focused || bot));
+        int catchup = 0;
+        while (next_tick <= now && catchup++ < 8) {
+            boundary = next_tick;
+            next_tick += 1'000'000'000 / 60;
+            const auto sampled = input.sample(boundary);
+            if (view.phase != net::Phase::playing || !prediction.initialized())
+                continue;
+            auto mask = overlay || (!focused && !bot) ? 0U : client::modern_input(sampled, preset);
+            if (bot) {
+                const auto tick = prediction.board().tick;
+                mask = modern::down;
+                if (preset == modern::Preset::modern && tick % 8 == 0)
+                    mask |= modern::hard_drop;
+            }
+            // Snapshot clock plus elapsed monotonic time. Lead is sampled as stable
+            // neutral frames before the live input; no tick is rewritten on resend.
+            const auto estimated = clock_tick + (now - snapshot_time) / (1'000'000'000 / 60);
+            // A received snapshot is about half an RTT old, and the uplink
+            // needs the other half. Reserve both halves plus three ticks.
+            const auto network_lead = std::min<std::uint64_t>(
+                90, 3 + (std::uint64_t(view.round_trip_ms) * 60 + 999) / 1000);
+            const auto target = estimated + network_lead;
+            modern::Events events;
+            for (int lead = 0; prediction.board().tick + 1 < target && lead < 7; ++lead)
+                if (!prediction.sample(0, events))
+                    break;
+            const bool had_hold = prediction.board().has_hold;
+            if (prediction.board().tick <= target && prediction.sample(mask, events)) {
+                if (events.shifted)
+                    audio.play(ClientAudio::Cue::shift);
+                if (events.soft_dropped)
+                    audio.play(ClientAudio::Cue::soft_drop);
+                if (events.rotated)
+                    audio.play(ClientAudio::Cue::rotate);
+                if (events.hard_dropped)
+                    audio.play(ClientAudio::Cue::hard_drop);
+                if (auto cue = client::hold_cue(events.held, had_hold))
+                    audio.play(*cue);
+                // Clear/attack/result effects require authoritative external events;
+                // speculative clears intentionally make no competitive outcome cue.
+            }
+            connection.submit(prediction.rolling());
+        }
+        if (next_tick + 8 * (1'000'000'000 / 60) < now)
+            next_tick = now + 1'000'000'000 / 60;
+        if (view.phase == net::Phase::results && view.has_snapshot &&
+            view.authoritative.result != stackpulse::match::Result::playing) {
+            terminal = true;
+            if (!result_time)
+                result_time = now;
+            if (bot && now - result_time > 1'000'000'000)
+                running = false;
+        }
+        if (bot && ((exit_ticks && view.server_tick >= exit_ticks && !terminal) ||
+                    now - started > 90'000'000'000ULL))
+            running = false;
+        if (bot && (view.phase == net::Phase::error || view.phase == net::Phase::disconnected) &&
+            now - started > 5'000'000'000ULL)
+            running = false;
+        color(renderer, {9, 15, 27, 255});
+        SDL_RenderClear(renderer);
+        text(renderer, 20, 14, "STACKPULSE / AUTHORITATIVE DUEL", mint);
+        text(renderer,
+             20,
+             32,
+             std::string(preset == modern::Preset::fusion ? "FUSION" : "MODERN") + " / " + host +
+                 ":" + number(port),
+             muted);
+        const std::array<const char*, 8> phases{"CONNECTING",
+                                                "WAITING",
+                                                "COUNTDOWN",
+                                                "PLAYING",
+                                                "RESULTS",
+                                                "DISCONNECTED",
+                                                "ERROR",
+                                                "?"};
+        text(renderer, 360, 14, phases[static_cast<std::size_t>(view.phase)], mint);
+        text(renderer,
+             360,
+             32,
+             "PLAYER " + number(view.player) + " / SERVER " + number(view.server_tick),
+             muted);
+        if (prediction.initialized()) {
+            const auto& board = prediction.board();
+            draw_board(board, 150, 61, 14, true);
+            text(renderer, 324, 64, "NEXT", mint);
+            for (std::size_t i = 0; i < board.next.size(); ++i) {
+                modern::Active next{
+                    board.next[i], modern::spawn_rotation(board.next[i], board.preset), 0, 0};
+                for (auto c : modern::cells(next))
+                    block(renderer,
+                          324 + c.x * 10.F,
+                          83 + static_cast<float>(i) * 39.F + c.y * 10.F,
+                          client::classic_palette_piece(next.piece),
+                          modern::gravity_interval(board),
+                          10);
+            }
+            text(renderer, 16, 177, board.hold_used ? "HOLD / USED" : "HOLD", muted);
+            if (board.has_hold)
+                for (auto c : modern::cells({board.held_piece,
+                                             modern::spawn_rotation(board.held_piece, board.preset),
+                                             0,
+                                             0}))
+                    block(renderer,
+                          98 + c.x * 8.F,
+                          177 + c.y * 8.F,
+                          client::classic_palette_piece(board.held_piece),
+                          modern::gravity_interval(board),
+                          8);
+        } else
+            text(renderer, 150, 100, "WAITING FOR SNAPSHOT", muted);
+        if (view.has_snapshot)
+            for (const auto& opponent : view.authoritative.players)
+                if (opponent.id != view.player) {
+                    draw_board(opponent.board, 411, 87, 10);
+                    text(renderer, 408, 65, "OPPONENT / AUTHORITATIVE", mint);
+                }
+        text(renderer, 16, 68, "LOCAL PREDICTED", mint);
+        if (prediction.initialized()) {
+            text(renderer, 16, 96, "SCORE " + number(prediction.board().score));
+            text(renderer, 16, 115, "LINES " + number(prediction.board().lines));
+            unsigned incoming = 0;
+            if (view.has_snapshot)
+                for (const auto& player : view.authoritative.players)
+                    if (player.id == view.player)
+                        for (const auto& packet : player.board.incoming)
+                            incoming += packet.rows;
+            text(renderer, 16, 143, "INCOMING " + number(incoming), mint);
+            for (unsigned row = 0; row < std::min(incoming, 20U); ++row)
+                rect(renderer, 306, 330.F - row * 12.F, 7, 10, {248, 130, 88, 255});
+            text(renderer, 16, 164, "RESYNCS " + number(prediction.hard_resets()), muted);
+        }
+        if (view.phase == net::Phase::waiting) {
+            text(renderer, 16, 203, view.ready ? "YOU: READY" : "ENTER / SOUTH: READY", mint);
+            text(renderer,
+                 16,
+                 225,
+                 view.opponent_ready ? "OPPONENT: READY" : "OPPONENT: WAITING",
+                 muted);
+        } else if (view.phase == net::Phase::countdown)
+            text(renderer, 16, 203, "START IN " + number((view.countdown + 59) / 60), mint);
+        else if (terminal) {
+            std::string result = "DRAW";
+            if (view.authoritative.result == stackpulse::match::Result::winner)
+                for (const auto& player : view.authoritative.players)
+                    if (!player.placement)
+                        result = player.id == view.player ? "YOU WIN" : "OPPONENT WINS";
+            text(renderer, 16, 203, result, mint);
+            text(renderer, 16, 225, "SERVER CONFIRMED", muted);
+        }
+        if (overlay) {
+            rect(renderer, 328, 292, 291, 45, {26, 61, 65, 255});
+            text(renderer, 337, 302, "INPUT RELEASED / PLAY CONTINUES", mint);
+            text(renderer, 337, 319, "ESC / START RESUMES INPUT", muted);
+        }
+        text(renderer, 16, 268, "F9 RECONNECT", muted);
+        text(renderer, 16, 287, "F10 LEAVE", muted);
+        text(renderer, 360, 322, "ONLINE REPLAY OFF", muted);
+        rect(renderer, 0, 345, 640, 15, {19, 33, 49, 255});
+        text(renderer, 8, 349, view.detail.substr(0, 76), mint);
+        if (!running && !capture_path.empty()) {
+            SDL_Surface* capture = SDL_RenderReadPixels(renderer, nullptr);
+            if (!capture || !SDL_SaveBMP(capture, capture_path.string().c_str()))
+                std::fprintf(stderr, "Online capture: %s\n", SDL_GetError());
+            SDL_DestroySurface(capture);
+        }
+        SDL_RenderPresent(renderer);
+        SDL_Delay(1);
+    }
+    const auto& final = connection.view();
+    if (final.has_snapshot)
+        std::printf(
+            "Online finished: player=%u tick=%llu result=%u authoritative_hash=%016llx "
+            "resyncs=%llu\n",
+            static_cast<unsigned>(final.player),
+            static_cast<unsigned long long>(final.authoritative.tick),
+            static_cast<unsigned>(final.authoritative.result),
+            static_cast<unsigned long long>(stackpulse::match::state_hash(final.authoritative)),
+            static_cast<unsigned long long>(prediction.hard_resets()));
+    else
+        std::fprintf(
+            stderr, "Online finished without authoritative snapshot: %s\n", final.detail.c_str());
+    if (terminal && final.has_snapshot)
+        std::printf(
+            "AUTHORITATIVE_RESULT tick=%llu result=%s hash=%016llx\n",
+            static_cast<unsigned long long>(final.authoritative.tick),
+            final.authoritative.result == stackpulse::match::Result::draw ? "draw" : "winner",
+            static_cast<unsigned long long>(stackpulse::match::state_hash(final.authoritative)));
+    connection.disconnect();
+    for (auto& [id, pad] : pads) {
+        (void)id;
+        SDL_CloseGamepad(pad.handle);
+    }
+    audio.set_playing(false);
+    return quit_application ? 2 : bot && !terminal ? 1 : 0;
+}
+#endif
 } // namespace
 int main(int argc, char** argv) {
     int smoke_frames = 0;
@@ -147,9 +548,29 @@ int main(int argc, char** argv) {
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
+    std::string online_host;
+    std::uint16_t online_port = 27877;
+    std::uint64_t online_exit_ticks = 0;
+    bool online_bot = false;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        if (arg == "--mode" && i + 1 < argc) {
+        if (arg == "--connect" && i + 1 < argc)
+            online_host = argv[++i];
+        else if (arg == "--online-bot")
+            online_bot = true;
+        else if ((arg == "--port" || arg == "--online-exit-ticks") && i + 1 < argc) {
+            std::uint64_t value = 0;
+            const std::string_view number_arg = argv[++i];
+            const auto parsed =
+                std::from_chars(number_arg.data(), number_arg.data() + number_arg.size(), value);
+            if (parsed.ec != std::errc{} || parsed.ptr != number_arg.data() + number_arg.size() ||
+                !value || (arg == "--port" && value > 65535))
+                return 2;
+            if (arg == "--port")
+                online_port = static_cast<std::uint16_t>(value);
+            else
+                online_exit_ticks = value;
+        } else if (arg == "--mode" && i + 1 < argc) {
             const std::string_view value = argv[++i];
             if (value == "classic")
                 mode = 0;
@@ -187,10 +608,19 @@ int main(int argc, char** argv) {
                          "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
                          "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
                          "[--smoke-settings] [--spin-debug] [--capture FILE.bmp] "
-                         "[--verify FILE]\n");
+                         "[--verify FILE] [--connect HOST --port N] "
+                         "[--online-bot --online-exit-ticks N]\n");
             return 2;
         }
     }
+    if (!online_host.empty() && mode == 0)
+        mode = 1;
+#ifndef STACKPULSE_NETWORK
+    if (!online_host.empty() || online_bot || online_exit_ticks) {
+        std::fprintf(stderr, "Networking disabled in this build\n");
+        return 2;
+    }
+#endif
     if (smoke_spin_debug && mode == 0)
         mode = 1;
     if (!verify_path.empty()) {
@@ -265,6 +695,24 @@ int main(int argc, char** argv) {
     settings.load(settings_path);
     if (force_sticks)
         settings.sticks = true;
+#ifdef STACKPULSE_NETWORK
+    if (!online_host.empty()) {
+        const auto result = run_online(renderer,
+                                       settings,
+                                       audio,
+                                       online_host,
+                                       online_port,
+                                       mode == 1 ? modern::Preset::fusion : modern::Preset::modern,
+                                       online_bot,
+                                       online_exit_ticks,
+                                       capture_path);
+        audio.shutdown();
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return result == 2 ? 0 : result;
+    }
+#endif
     std::map<SDL_JoystickID, Pad> pads;
     auto open_pad = [&](SDL_JoystickID id) {
         if (!pads.contains(id))
@@ -461,7 +909,7 @@ int main(int argc, char** argv) {
         save_settings();
     };
     auto navigate = [&](int direction) {
-        const int size = screen == Screen::home ? 6 : screen == Screen::pause ? 7 : 19;
+        const int size = screen == Screen::home ? 7 : screen == Screen::pause ? 7 : 19;
         int& row = screen == Screen::settings ? settings_row : selection;
         row = (row + direction + size) % size;
     };
@@ -515,6 +963,38 @@ int main(int argc, char** argv) {
             } else if (selection == 4) {
                 settings_return = screen;
                 screen = Screen::settings;
+            } else if (selection == 5) {
+#ifdef STACKPULSE_NETWORK
+                if (!save_recording())
+                    return;
+                release(SDL_GetTicksNS());
+                const auto online_result =
+                    run_online(renderer,
+                               settings,
+                               audio,
+                               "127.0.0.1",
+                               online_port,
+                               mode == 2 ? modern::Preset::modern : modern::Preset::fusion,
+                               false,
+                               0);
+                if (online_result == 2)
+                    running = false;
+                // The online session consumed hotplug events; refresh offline handles.
+                for (auto& [id, pad] : pads) {
+                    (void)id;
+                    SDL_CloseGamepad(pad.handle);
+                }
+                pads.clear();
+                int online_pad_count = 0;
+                auto* online_pad_ids = SDL_GetGamepads(&online_pad_count);
+                for (int i = 0; i < online_pad_count; ++i)
+                    open_pad(online_pad_ids[i]);
+                SDL_free(online_pad_ids);
+                release(SDL_GetTicksNS());
+                notice = "RETURNED FROM MULTIPLAYER";
+#else
+                notice = "NETWORKING DISABLED IN THIS BUILD";
+#endif
             } else
                 running = false;
         } else if (screen == Screen::pause) {
@@ -940,18 +1420,19 @@ int main(int argc, char** argv) {
         rect(renderer, 18, 50, 604, 1, {48, 66, 88, 255});
         if (screen == Screen::home) {
             text(renderer, 36, 77, "BUILD. CLEAR. FIND YOUR RHYTHM.", ink);
-            const std::array<std::string, 6> menu{"MODE: " + mode_name() + " / ENTER CYCLES",
+            const std::array<std::string, 7> menu{"MODE: " + mode_name() + " / ENTER CYCLES",
                                                   "MARATHON",
                                                   "PRACTICE LAB",
                                                   "PLAY LAST REPLAY",
                                                   "SETTINGS / CONTROLS",
+                                                  "MULTIPLAYER / LOCALHOST",
                                                   "QUIT"};
-            for (int i = 0; i < 6; ++i) {
+            for (int i = 0; i < 7; ++i) {
                 if (selection == i)
-                    rect(renderer, 28, 103.F + i * 29.F, 342, 25, {26, 61, 65, 255});
+                    rect(renderer, 28, 101.F + i * 26.F, 342, 25, {26, 61, 65, 255});
                 text(renderer,
                      40,
-                     111.F + i * 29.F,
+                     109.F + i * 26.F,
                      std::string(selection == i ? "> " : "  ") + menu[i],
                      selection == i ? mint : ink);
             }
