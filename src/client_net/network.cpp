@@ -264,19 +264,43 @@ struct Client::Impl {
             Reader full{object};
             const auto match = full.get(8), version = full.get(4), rules = full.get(1),
                        hash = full.get(8);
+            std::vector<SoundCounters> sounds;
+            const bool valid_sounds = read_sounds(full, sounds);
             auto bytes = full.data(full.bytes.size() - full.offset);
             match::State state;
-            if (!full.done() || match != match_id || version != modern::rules_version ||
-                rules != static_cast<unsigned>(preset) || !match::decode_state(bytes, state) ||
-                state.players.size() < 2 || state.players.size() > 8 ||
-                match::state_hash(state) != hash ||
+            if (!valid_sounds || !full.done() || match != match_id ||
+                version != modern::rules_version || rules != static_cast<unsigned>(preset) ||
+                !match::decode_state(bytes, state) || state.players.size() < 2 ||
+                state.players.size() > 8 || match::state_hash(state) != hash ||
                 std::any_of(state.players.begin(), state.players.end(), [&](const auto& b) {
                     return b.board.preset != preset;
                 })) {
                 fail("Invalid authoritative snapshot");
                 return;
             }
+            bool counters_valid = sounds.size() == state.players.size();
+            for (std::size_t i = 0; counters_valid && i < sounds.size(); ++i) {
+                counters_valid = sounds[i].player == state.players[i].id;
+                for (std::size_t j = 0; j < sounds[i].counts.size(); ++j) {
+                    const auto count = sounds[i].counts[j];
+                    const bool warning = j == static_cast<std::size_t>(SoundEvent::garbage_warning);
+                    counters_valid &=
+                        warning ? count / 8 + (count % 8 != 0) <= state.tick : count <= state.tick;
+                }
+            }
+            if (!counters_valid) {
+                fail("Invalid authoritative sound counters");
+                return;
+            }
             if (!view.has_snapshot || state.tick >= view.authoritative.tick) {
+                if (view.has_snapshot && view.sounds.size() == sounds.size())
+                    for (std::size_t i = 0; i < sounds.size(); ++i)
+                        for (std::size_t j = 0; j < sounds[i].counts.size(); ++j)
+                            if (sounds[i].counts[j] < view.sounds[i].counts[j]) {
+                                fail("Regressing authoritative sound counters");
+                                return;
+                            }
+                view.sounds = std::move(sounds);
                 view.authoritative = std::move(state);
                 view.has_snapshot = true;
                 view.server_tick = view.accepted_through = view.authoritative.tick;

@@ -48,7 +48,7 @@ std::vector<std::uint8_t> encode(const Packet& p) {
         return {};
     Writer w;
     w.put(0x33445053, 4);
-    w.put(3, 1);
+    w.put(4, 1);
     w.put(static_cast<unsigned>(p.tag), 1);
     w.put(p.body.size(), 2);
     w.put(p.session, 8);
@@ -59,7 +59,7 @@ bool decode(std::span<const std::uint8_t> b, Packet& out) {
     if (b.size() < 16 || b.size() > max_packet)
         return false;
     Reader r{b};
-    if (r.get(4) != 0x33445053 || r.get(1) != 3)
+    if (r.get(4) != 0x33445053 || r.get(1) != 4)
         return false;
     auto t = r.get(1), n = r.get(2), s = r.get(8);
     if (t < 1 || t > 19 || n != b.size() - 16)
@@ -68,6 +68,35 @@ bool decode(std::span<const std::uint8_t> b, Packet& out) {
     if (!r.done())
         return false;
     out = std::move(p);
+    return true;
+}
+void write_sounds(Writer& w, const std::vector<SoundCounters>& sounds) {
+    w.put(sounds.size(), 1);
+    for (const auto& player : sounds) {
+        w.put(player.player, 2);
+        for (const auto count : player.counts)
+            w.put(count, 8);
+    }
+}
+bool read_sounds(Reader& r, std::vector<SoundCounters>& out) {
+    const auto count = r.get(1);
+    if (!r.ok || count < 2 || count > 8)
+        return false;
+    std::vector<SoundCounters> sounds;
+    std::uint16_t previous{};
+    for (std::size_t i = 0; i < count; ++i) {
+        SoundCounters player;
+        player.player = static_cast<std::uint16_t>(r.get(2));
+        if (!r.ok || player.player <= previous)
+            return false;
+        previous = player.player;
+        for (auto& value : player.counts)
+            value = r.get(8);
+        sounds.push_back(player);
+    }
+    if (!r.ok)
+        return false;
+    out = std::move(sounds);
     return true;
 }
 bool valid_options(const RoomOptions& o) {

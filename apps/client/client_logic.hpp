@@ -151,7 +151,10 @@ enum class Cue : std::size_t {
     spin_double,
     spin_triple,
     hold_store,
-    hold_retrieve
+    hold_retrieve,
+    locked,
+    garbage_warning,
+    garbage_hit
 };
 
 // Only an accepted hold emits a cue; occupancy must be sampled before stepping.

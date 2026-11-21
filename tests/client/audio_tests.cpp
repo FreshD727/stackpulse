@@ -1,6 +1,7 @@
 #include "../../apps/client/audio_tones.hpp"
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
+#include <memory>
 
 namespace audio = stackpulse::client::audio;
 namespace {
@@ -40,12 +41,21 @@ TEST_CASE("Spin cues use bass percussion distinct from the four-clear melody", "
 
 TEST_CASE("Synthesized clear spin and hold voices remain short quiet and tapered",
           "[client][audio]") {
-    for (const auto& tone : {audio::four_line_tone(),
-                             audio::spin_tone(1),
-                             audio::spin_tone(2),
-                             audio::spin_tone(3),
-                             audio::hold_tone(false),
-                             audio::hold_tone(true)}) {
+    // Construct one heap-backed PCM buffer at a time. An initializer list of all
+    // nine buffers plus its temporaries exhausts the Windows test thread stack.
+    using Factory = audio::Tone (*)();
+    const std::array<Factory, 9> factories{audio::four_line_tone,
+                                           [] { return audio::spin_tone(1); },
+                                           [] { return audio::spin_tone(2); },
+                                           [] { return audio::spin_tone(3); },
+                                           [] { return audio::hold_tone(false); },
+                                           [] { return audio::hold_tone(true); },
+                                           audio::lock_tone,
+                                           [] { return audio::garbage_tone(false); },
+                                           [] { return audio::garbage_tone(true); }};
+    for (const auto factory : factories) {
+        const auto buffer = std::make_unique<audio::Tone>(factory());
+        const auto& tone = *buffer;
         REQUIRE(tone.length <= tone.samples.size());
         REQUIRE(tone.length <= static_cast<std::size_t>(audio::sample_rate * .26));
         REQUIRE(tone.samples.front() == 0.F);
@@ -58,6 +68,21 @@ TEST_CASE("Synthesized clear spin and hold voices remain short quiet and tapered
         for (std::size_t i = tone.length; i < tone.samples.size(); ++i)
             REQUIRE(tone.samples[i] == 0.F);
     }
+}
+
+TEST_CASE("Lock incoming warning and garbage impact have distinct audible voices",
+          "[client][audio]") {
+    const auto lock = audio::lock_tone();
+    const auto warning = audio::garbage_tone(false);
+    const auto hit = audio::garbage_tone(true);
+    REQUIRE(energy(lock) > 0.);
+    REQUIRE(energy(warning) > 0.);
+    REQUIRE(energy(hit) > 0.);
+    REQUIRE(bass_fraction(lock) > .6);
+    REQUIRE(bass_fraction(hit) > .6);
+    REQUIRE(bass_fraction(warning) < .3);
+    REQUIRE(lock.length < hit.length);
+    REQUIRE(lock.samples != hit.samples);
 }
 
 TEST_CASE("Hold store and retrieval use distinct opposing note orders", "[client][audio][hold]") {

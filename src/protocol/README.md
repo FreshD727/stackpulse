@@ -1,14 +1,15 @@
-# M4 executable room wire (SPD3 revision 3)
+# M4 executable room wire (SPD3 revision 4)
 
-Revision 3 adds server lobby discovery, passwords and per-room configuration to the separate SPD3 protocol. It rejects
-revisions 1 and 2 explicitly; it does not implement the SPN1 design draft. ENet reliable
+Revision 4 adds authoritative cumulative sound counters to full snapshots. Revision 3
+added server lobby discovery, passwords and per-room configuration. This protocol rejects
+revisions 1 through 3 explicitly; it does not implement the SPN1 design draft. ENet reliable
 UDP channel 0 carries controls and full snapshots. Unreliable sequenced channel 1
 carries player input. Rules v6, canonical SPM1/SPCR bytes, simulation and replay
 formats are unchanged. This private alpha has no account service or
 transport encryption. Bind defaults to loopback.
 
 All integers are unsigned little endian. The envelope is magic `SPD3`, revision
-u8=3, tag u8, body length u16, session u64, then exactly body length bytes.
+u8=4, tag u8, body length u16, session u64, then exactly body length bytes.
 Maximum application packet is 1200 bytes; unknown tags/revisions reject. Hello
 uses session zero. Other client packets must match the assigned peer/session.
 
@@ -84,7 +85,17 @@ Chunk partition is fixed at1120 bytes, offset=index*1120, count exactly
 ceil(total/1120), count<=1024, total<=1MiB. Assembly is bounded to one object per
 client with a300-tick timeout, identical duplicates accepted and conflicting
 parts rejected. Complete object: match u64, rules u32=6, preset u8, FNV64 u64,
-then complete canonical SPM1 match bytes. Classic rooms use the Classic core
+sound roster count u8 (2..8), sound records, then complete canonical SPM1 match bytes.
+Each sound record is player u16 followed by ten cumulative u64 counts: lock, ordinary
+one/two/three/four-line clear, spin one/two/three-line clear, incoming attack warning,
+garbage insertion impact. IDs must match the sorted canonical roster. Counts reset
+at match start; each is bounded by match tick (warnings by eight times tick), and
+accepted snapshots cannot regress counters. These presentation counters are outside
+the canonical core hash and replay formats. Match events generate them directly;
+score changes never infer sounds. Skipped snapshots retain occurrences. The client
+coalesces each changed bucket to one cue per snapshot, deduplicates revisions, and
+silently baselines on first authority, reconnect, new epoch or spectator focus change.
+Players hear their board; spectators hear the featured board. Classic rooms use the Classic core
 through its canonical facade; Classic scoring/survival does not apply Modern
 garbage attacks. The decoder verifies2..8 sorted players,
 canonical state validity, preset and hash before replacing authority. FNV detects

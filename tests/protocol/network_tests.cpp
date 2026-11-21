@@ -368,6 +368,11 @@ TEST_CASE("Actual UDP snapshots carry server-generated attack and garbage insert
     REQUIRE_FALSE(b.view().authoritative.players[1].board.incoming.empty());
     REQUIRE(b.view().authoritative.players[1].board.incoming[0].rows == rows);
     REQUIRE(b.view().authoritative.next_packet_id == 2);
+    REQUIRE(a.view().sounds.size() == 2);
+    REQUIRE(a.view().sounds[0].counts[static_cast<std::size_t>(net::SoundEvent::locked)] == 1);
+    REQUIRE(a.view().sounds[0].counts[static_cast<std::size_t>(net::SoundEvent::spin_double)] == 1);
+    REQUIRE(b.view().sounds[1].counts[static_cast<std::size_t>(net::SoundEvent::garbage_warning)] ==
+            1);
     while (server.view().authoritative.tick < 35)
         pump(server, a, b, 1);
     const auto tick = server.view().authoritative.tick;
@@ -378,6 +383,9 @@ TEST_CASE("Actual UDP snapshots carry server-generated attack and garbage insert
                        server.view().authoritative.players[1].board.board.end(),
                        8) >= rows * 9);
     REQUIRE(b.view().authoritative.players[1].board.incoming.empty());
+    REQUIRE(b.view().sounds[1].counts[static_cast<std::size_t>(net::SoundEvent::garbage_hit)] == 1);
+    REQUIRE(b.view().sounds[1].counts[static_cast<std::size_t>(net::SoundEvent::garbage_warning)] ==
+            1);
     REQUIRE(match::valid_state(a.view().authoritative));
     REQUIRE(match::valid_state(b.view().authoritative));
 }

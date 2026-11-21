@@ -46,6 +46,46 @@ inline Tone hold_tone(bool retrieving) {
     return tone;
 }
 
+inline Tone lock_tone() {
+    Tone tone;
+    tone.length = 2880;
+    float phase = 0.F;
+    for (std::size_t i = 0; i < tone.length; ++i) {
+        const float progress = static_cast<float>(i) / static_cast<float>(tone.length - 1);
+        const float attack = std::min(1.F, static_cast<float>(i) / 48.F);
+        phase += 6.28318530718F * (110.F - 65.F * progress) / sample_rate;
+        tone.samples[i] = .07F * attack * (1.F - progress) * (1.F - progress) * std::sin(phase);
+    }
+    return tone;
+}
+
+inline Tone garbage_tone(bool hit) {
+    if (hit) {
+        auto tone = lock_tone();
+        // A longer, rougher impact remains distinct from the short piece thud.
+        tone.length = 5760;
+        for (std::size_t i = 0; i < tone.length; ++i) {
+            const float p = static_cast<float>(i) / static_cast<float>(tone.length - 1);
+            const float t = static_cast<float>(i) / sample_rate;
+            tone.samples[i] =
+                .055F * std::min(1.F, static_cast<float>(i) / 48.F) * (1.F - p) * (1.F - p) *
+                (std::sin(6.28318530718F * 62.F * t) + .35F * std::sin(6.28318530718F * 173.F * t));
+        }
+        return tone;
+    }
+    Tone tone;
+    tone.length = 7680;
+    constexpr std::size_t pulse = 3840;
+    for (std::size_t i = 0; i < tone.length; ++i) {
+        const auto position = i % pulse;
+        const float p = static_cast<float>(position) / static_cast<float>(pulse - 1);
+        const float t = static_cast<float>(position) / sample_rate;
+        tone.samples[i] = .045F * std::min(1.F, static_cast<float>(position) / 96.F) * (1.F - p) *
+                          std::sin(6.28318530718F * (i < pulse ? 660.F : 880.F) * t);
+    }
+    return tone;
+}
+
 inline Tone spin_tone(unsigned tier) {
     Tone tone;
     tier = std::clamp(tier, 1U, 3U);

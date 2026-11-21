@@ -44,6 +44,11 @@ class ClientAudio {
             stackpulse::client::audio::hold_tone(false);
         tones_[static_cast<std::size_t>(Cue::hold_retrieve)] =
             stackpulse::client::audio::hold_tone(true);
+        tones_[static_cast<std::size_t>(Cue::locked)] = stackpulse::client::audio::lock_tone();
+        tones_[static_cast<std::size_t>(Cue::garbage_warning)] =
+            stackpulse::client::audio::garbage_tone(false);
+        tones_[static_cast<std::size_t>(Cue::garbage_hit)] =
+            stackpulse::client::audio::garbage_tone(true);
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             unavailable();
             return;
@@ -57,7 +62,7 @@ class ClientAudio {
             return;
         }
         std::printf("Audio: synthesized movement / soft drop / hard drop / rotation / clear / spin "
-                    "tiers / hold store / hold retrieval\n");
+                    "tiers / hold store / hold retrieval / lock / garbage warning / garbage hit\n");
     }
 
     void set_playing(bool playing) {
@@ -110,7 +115,7 @@ class ClientAudio {
     };
     // Keep the immutable PCM bank off the small Windows main-thread stack.
     // It is allocated once before the audio callback starts and never resized.
-    std::vector<Tone> tones_ = std::vector<Tone>(static_cast<std::size_t>(Cue::hold_retrieve) + 1);
+    std::vector<Tone> tones_ = std::vector<Tone>(static_cast<std::size_t>(Cue::garbage_hit) + 1);
     std::array<Voice, 8> voices_{};
     std::size_t next_voice_{};
     SDL_AudioStream* stream_{};

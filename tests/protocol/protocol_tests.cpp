@@ -3,12 +3,43 @@
 #include <stackpulse/protocol.hpp>
 using namespace stackpulse::net;
 using namespace stackpulse::net::wire;
-TEST_CASE("SPD3 revision 3 envelope validates exact bounded lengths and tags", "[network][codec]") {
+TEST_CASE("Snapshot sound counters validate roster bounds ordering and truncation",
+          "[network][codec]") {
+    std::vector<SoundCounters> source{{1, {}}, {3, {}}};
+    source[0].counts[static_cast<std::size_t>(SoundEvent::spin_double)] = 17;
+    Writer writer;
+    write_sounds(writer, source);
+    Reader reader{writer.bytes};
+    std::vector<SoundCounters> decoded;
+    REQUIRE(read_sounds(reader, decoded));
+    REQUIRE(reader.done());
+    REQUIRE(decoded == source);
+    for (std::size_t size = 0; size < writer.bytes.size(); ++size) {
+        Reader truncated{std::span(writer.bytes).first(size)};
+        REQUIRE_FALSE(read_sounds(truncated, decoded));
+        REQUIRE(decoded == source);
+    }
+    for (const auto count : {0, 1, 9, 255}) {
+        auto bytes = writer.bytes;
+        bytes[0] = static_cast<std::uint8_t>(count);
+        Reader bad{bytes};
+        REQUIRE_FALSE(read_sounds(bad, decoded));
+    }
+    source[1].player = 1;
+    Writer duplicate;
+    write_sounds(duplicate, source);
+    Reader bad{duplicate.bytes};
+    REQUIRE_FALSE(read_sounds(bad, decoded));
+}
+TEST_CASE("SPD3 revision 4 envelope validates exact bounded lengths and tags", "[network][codec]") {
     Packet p{Tag::hello, 0, {5, 0, 0, 0, 0, 0}}, out;
     auto bytes = encode(p);
     REQUIRE(bytes.size() == 22);
     REQUIRE(decode(bytes, out));
     REQUIRE(out.body == p.body);
+    auto old_revision = bytes;
+    old_revision[4] = 3;
+    REQUIRE_FALSE(decode(old_revision, out));
     for (std::size_t n = 0; n < bytes.size(); ++n)
         REQUIRE_FALSE(decode(std::span(bytes).first(n), out));
     auto bad = bytes;

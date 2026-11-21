@@ -48,6 +48,8 @@ struct Reader {
 };
 std::vector<std::uint8_t> encode(const Packet&);
 bool decode(std::span<const std::uint8_t>, Packet&);
+void write_sounds(Writer&, const std::vector<SoundCounters>&);
+bool read_sounds(Reader&, std::vector<SoundCounters>&);
 void write_options(Writer&, const RoomOptions&, bool secret = true);
 bool read_options(Reader&, RoomOptions&, bool secret = true);
 bool valid_options(const RoomOptions&);

@@ -1,9 +1,67 @@
 #pragma once
+#include "client_logic.hpp"
 #include <algorithm>
 #include <deque>
 #include <stackpulse/network.hpp>
 
 namespace stackpulse::client {
+// Only server counters produce online lock/clear/garbage cues. Reconciliation
+// never touches this cursor; entering/recovering/switching a board seeds a baseline.
+class OnlineSoundObserver {
+  public:
+    void reset() {
+        *this = OnlineSoundObserver{};
+    }
+    std::vector<Cue> observe(const net::View& view) {
+        if (!view.has_snapshot ||
+            (view.phase != net::Phase::playing && view.phase != net::Phase::results)) {
+            reset();
+            return {};
+        }
+        const auto player = view.role == net::Role::spectator ? view.featured_player : view.player;
+        const auto it = std::find_if(view.sounds.begin(), view.sounds.end(), [&](const auto& row) {
+            return row.player == player;
+        });
+        if (it == view.sounds.end()) {
+            reset();
+            return {};
+        }
+        const bool baseline =
+            !initialized_ || room_ != view.room_id || match_ != view.match_id || player_ != player;
+        if (!baseline && view.snapshot_revision <= revision_)
+            return {};
+        std::vector<Cue> cues;
+        constexpr std::array mapping{Cue::locked,
+                                     Cue::clear,
+                                     Cue::clear,
+                                     Cue::clear,
+                                     Cue::four_line_clear,
+                                     Cue::spin_single,
+                                     Cue::spin_double,
+                                     Cue::spin_triple,
+                                     Cue::garbage_warning,
+                                     Cue::garbage_hit};
+        if (!baseline)
+            for (std::size_t i = 0; i < mapping.size(); ++i) {
+                // Coalesce catch-up occurrences of each cue rather than burst old audio.
+                if (it->counts[i] > counts_[i])
+                    cues.push_back(mapping[i]);
+            }
+        counts_ = it->counts;
+        room_ = view.room_id;
+        match_ = view.match_id;
+        player_ = player;
+        revision_ = view.snapshot_revision;
+        initialized_ = true;
+        return cues;
+    }
+
+  private:
+    std::uint64_t room_{}, match_{}, revision_{};
+    std::uint16_t player_{};
+    bool initialized_{};
+    decltype(net::SoundCounters::counts) counts_{};
+};
 enum class RoomAction { ready, return_to_lobby, leave };
 inline std::vector<RoomAction> room_actions(const net::View& view) {
     std::vector<RoomAction> actions;

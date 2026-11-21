@@ -12,6 +12,56 @@ stackpulse::net::View snapshot(std::uint64_t revision = 1) {
 }
 } // namespace
 
+TEST_CASE("Online sound counters survive skipped snapshots without replaying correction cues",
+          "[online][audio]") {
+    namespace net = stackpulse::net;
+    namespace client = stackpulse::client;
+    auto view = snapshot();
+    view.phase = net::Phase::playing;
+    view.room_id = 1;
+    view.match_id = 5;
+    view.sounds = {{1, {}}, {2, {}}};
+    client::OnlineSoundObserver sounds;
+    REQUIRE(sounds.observe(view).empty());
+    auto increment = [&](std::size_t player, net::SoundEvent event, std::uint64_t count = 1) {
+        view.sounds[player].counts[static_cast<std::size_t>(event)] += count;
+    };
+    increment(0, net::SoundEvent::locked, 3);
+    increment(0, net::SoundEvent::spin_double);
+    increment(0, net::SoundEvent::garbage_warning);
+    increment(0, net::SoundEvent::garbage_hit);
+    ++view.snapshot_revision;
+    const std::vector expected{client::Cue::locked,
+                               client::Cue::spin_double,
+                               client::Cue::garbage_warning,
+                               client::Cue::garbage_hit};
+    REQUIRE(sounds.observe(view) == expected);
+    REQUIRE(sounds.observe(view).empty());
+    ++view.snapshot_revision; // Reconciliation with identical counters is silent.
+    REQUIRE(sounds.observe(view).empty());
+    increment(1, net::SoundEvent::clear_four);
+    ++view.snapshot_revision;
+    REQUIRE(sounds.observe(view).empty()); // Other board is not the local audio focus.
+    view.role = net::Role::spectator;
+    view.featured_player = 2;
+    REQUIRE(sounds.observe(view).empty()); // Switching focus suppresses history.
+    increment(1, net::SoundEvent::clear_four);
+    ++view.snapshot_revision;
+    REQUIRE(sounds.observe(view) == std::vector{client::Cue::four_line_clear});
+    view.phase = net::Phase::connecting;
+    REQUIRE(sounds.observe(view).empty());
+    increment(1, net::SoundEvent::clear_four, 10);
+    view.phase = net::Phase::playing;
+    ++view.snapshot_revision;
+    REQUIRE(sounds.observe(view).empty()); // Reconnect establishes a fresh baseline.
+    ++view.match_id;
+    view.sounds = {{1, {}}, {2, {}}};
+    REQUIRE(sounds.observe(view).empty());
+    increment(1, net::SoundEvent::clear_single);
+    ++view.snapshot_revision;
+    REQUIRE(sounds.observe(view) == std::vector{client::Cue::clear});
+}
+
 TEST_CASE("Lobby actions keep Leave reachable for every member and phase", "[online][ui]") {
     namespace net = stackpulse::net;
     namespace client = stackpulse::client;

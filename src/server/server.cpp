@@ -317,6 +317,7 @@ struct Server::Impl {
         w.put(modern::rules_version, 4);
         w.put(static_cast<unsigned>(r->view.room.preset), 1);
         w.put(match::state_hash(r->view.authoritative), 8);
+        write_sounds(w, r->view.sounds);
         w.data(match::canonical_bytes(r->view.authoritative));
         auto id = c.next_transfer++;
         if (!id)
@@ -701,6 +702,9 @@ struct Server::Impl {
                             : match::initial_state(
                                   ids, r.last_seed, v.room.preset, v.room.start_level);
                     v.has_snapshot = true;
+                    v.sounds.clear();
+                    for (const auto& player : v.authoritative.players)
+                        v.sounds.push_back({player.id, {}});
                     v.phase = Phase::playing;
                     lobby(r);
                 } else if (v.countdown % 30 == 0)
@@ -714,7 +718,8 @@ struct Server::Impl {
                                        : 0);
                 }
                 std::string err;
-                if (!match::advance(v.authoritative, held, nullptr, err)) {
+                match::Events events;
+                if (!match::advance(v.authoritative, held, &events, err)) {
                     failure = err;
                     v.phase = Phase::error;
                 } else if (v.authoritative.result != match::Result::playing) {
@@ -723,6 +728,22 @@ struct Server::Impl {
                         s.credential = {};
                     lobby(r);
                 }
+                for (std::size_t i = 0; i < events.boards.size(); ++i) {
+                    const auto& e = events.boards[i];
+                    auto& counts = v.sounds[i].counts;
+                    if (e.locked)
+                        ++counts[static_cast<std::size_t>(SoundEvent::locked)];
+                    if (e.cleared >= 1 && e.cleared <= 4) {
+                        const auto index = e.spin && e.cleared <= 3 ? 4 + e.cleared : e.cleared;
+                        ++counts[index];
+                    }
+                    if (e.inserted)
+                        ++counts[static_cast<std::size_t>(SoundEvent::garbage_hit)];
+                }
+                for (const auto& arrival : events.dispatched)
+                    for (auto& player : v.sounds)
+                        if (player.player == arrival.recipient)
+                            ++player.counts[static_cast<std::size_t>(SoundEvent::garbage_warning)];
             }
             if (v.has_snapshot) {
                 v.server_tick = v.accepted_through = v.authoritative.tick;

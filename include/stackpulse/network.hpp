@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -52,6 +53,26 @@ struct Input {
     std::uint64_t tick{};
     std::uint32_t sequence{}, held{};
 };
+// Presentation-only cumulative events, scoped to one match and roster player.
+// Snapshots retain every occurrence even when intermediate snapshots are skipped.
+enum class SoundEvent : std::size_t {
+    locked,
+    clear_single,
+    clear_double,
+    clear_triple,
+    clear_four,
+    spin_single,
+    spin_double,
+    spin_triple,
+    garbage_warning,
+    garbage_hit,
+    count
+};
+struct SoundCounters {
+    std::uint16_t player{};
+    std::array<std::uint64_t, static_cast<std::size_t>(SoundEvent::count)> counts{};
+    bool operator==(const SoundCounters&) const = default;
+};
 struct View {
     Phase phase{Phase::connecting};
     std::string detail;
@@ -75,6 +96,7 @@ struct View {
     std::uint32_t round_trip_ms{}; // ENet smoothed RTT; presentation clock estimate only.
     bool connected{}, ready{}, opponent_ready{}, has_snapshot{};
     match::State authoritative;
+    std::vector<SoundCounters> sounds;
 };
 // Owns ENet socket/session and credentials. No board/score/attack uplink exists.
 class Client {
