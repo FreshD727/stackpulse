@@ -53,6 +53,8 @@ A server build uses no SDL: configure with `STACKPULSE_BUILD_CLIENT=OFF`, or use
 
 For a distributable Windows build, build the Release configuration and run the allowlisted [packaging tool](tools/package_release.py) as described in [PACKAGING.md](docs/PACKAGING.md). The ZIP includes the required app-local Visual C++ runtime and dependency licenses, with SHA-256 file hashes. `stackpulse_determinism_matrix` and [its comparison runner](tools/determinism_matrix.py) reproduce the Windows/Linux trace checks. [room_soak.py](tools/room_soak.py) runs the actual-UDP 8-player/16-spectator capacity harness for a measured wall-clock interval.
 
+Issue-6 random seeds, streamlined menus and Leave Lobby actions are recorded in [the resolution](docs/issues/issue-6-resolution.md). `--seed N` selects an initial solo seed or fixes server match seeds for reproducible checks; normal new runs and matches use random seeds.
+
 Issue-2 gameplay, compatibility and validation are recorded in [the resolution](docs/issues/issue-2-resolution.md).
 
 Issue-1 fixes and validation are recorded in [the resolution](docs/issues/issue-1-resolution.md). See [formatting and opt-in pre-commit checks](docs/FORMATTING.md).
