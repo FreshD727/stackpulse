@@ -1,6 +1,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdio>
+#include <limits>
 #include <stackpulse/network.hpp>
 #include <string_view>
 #include <thread>
@@ -22,14 +23,18 @@ int main(int argc, char** argv) {
             else
                 return 2;
         } else if ((arg == "--port" || arg == "--ticks" || arg == "--players" ||
-                    arg == "--spectators" || arg == "--rooms") &&
+                    arg == "--spectators" || arg == "--rooms" || arg == "--seed") &&
                    i + 1 < argc) {
             std::string_view value = argv[++i];
             std::uint64_t n{};
             auto result = std::from_chars(value.data(), value.data() + value.size(), n);
             if (result.ec != std::errc{} || result.ptr != value.data() + value.size())
                 return 2;
-            if (arg == "--port") {
+            if (arg == "--seed") {
+                if (n > (std::numeric_limits<std::uint32_t>::max)())
+                    return 2;
+                options.seed = static_cast<std::uint32_t>(n);
+            } else if (arg == "--port") {
                 if (!n || n > 65535)
                     return 2;
                 options.port = static_cast<std::uint16_t>(n);

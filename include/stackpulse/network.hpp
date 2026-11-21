@@ -110,7 +110,8 @@ struct ServerOptions {
     std::string bind{"127.0.0.1"};
     std::uint16_t port{default_port};
     modern::Preset preset{modern::Preset::fusion};
-    std::uint32_t seed{727};
+    // Unset: fresh entropy for every match. Set: reuse this seed for QA/rematches.
+    std::optional<std::uint32_t> seed;
     std::uint8_t players{8}, spectators{16}, rooms{8};
     // Constructor-only deterministic integration fixture; never accepted over wire
     // or exposed by the server CLI. Must be a valid playing tick-zero duel with

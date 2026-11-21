@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <iterator>
 #include <stackpulse/network.hpp>
+#include <stackpulse/seeds.hpp>
 #include <thread>
 using namespace stackpulse;
 namespace {
@@ -29,6 +31,42 @@ void start(net::Server& server, net::Client& a, net::Client& b, std::uint16_t po
     REQUIRE(server.view().phase == net::Phase::playing);
 }
 } // namespace
+TEST_CASE("Gameplay seed selection rejects zero and the previous seed", "[network][seeds]") {
+    const std::uint32_t draws[]{0, 123, 123, 0, 0xffffffffu, 42};
+    std::size_t cursor{};
+    auto draw = [&]() {
+        REQUIRE(cursor < std::size(draws));
+        return draws[cursor++];
+    };
+    REQUIRE(seeds::choose(draw, 123) == 0xffffffffu);
+    REQUIRE(cursor == 5);
+    REQUIRE(seeds::choose(draw, 0xffffffffu) == 42);
+    REQUIRE(cursor == 6);
+    const net::ServerOptions defaults;
+    REQUIRE_FALSE(defaults.seed.has_value());
+}
+TEST_CASE("Explicit server seeds reproduce the initial simulation state",
+          "[network][socket][seeds]") {
+    for (const auto seed : {0u, 727u, 0xffffffffu}) {
+        net::ServerOptions options;
+        options.port = 28804;
+        options.seed = seed;
+        net::Server server(options);
+        REQUIRE(server.valid());
+        net::Client a, b;
+        REQUIRE(a.connect("127.0.0.1", options.port, options.preset));
+        REQUIRE(b.connect("127.0.0.1", options.port, options.preset));
+        pump(server, a, b, 30);
+        REQUIRE(a.view().connected);
+        REQUIRE(b.view().connected);
+        a.set_ready(true);
+        b.set_ready(true);
+        for (unsigned i = 0; i < 210 && server.view().phase != net::Phase::playing; ++i)
+            pump(server, a, b, 1);
+        REQUIRE(server.view().phase == net::Phase::playing);
+        REQUIRE(server.view().authoritative == match::initial_state({1, 2}, seed, options.preset));
+    }
+}
 TEST_CASE("Actual ENet UDP duel snapshots survive reconnect beyond prediction history",
           "[network][socket]") {
     net::ServerOptions options;

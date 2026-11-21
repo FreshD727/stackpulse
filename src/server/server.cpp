@@ -4,6 +4,7 @@
 #include <limits>
 #include <map>
 #include <stackpulse/protocol.hpp>
+#include <stackpulse/seeds.hpp>
 
 namespace stackpulse::net {
 namespace {
@@ -44,6 +45,7 @@ struct Server::Impl {
         View view;
         std::map<std::uint16_t, Slot> slots;
         std::uint16_t next_member{1};
+        std::uint32_t last_seed{};
         std::string password;
     };
     ServerOptions options;
@@ -691,12 +693,13 @@ struct Server::Impl {
                     for (auto& [id, s] : r.slots)
                         if (s.role == Role::player)
                             ids.push_back(id);
+                    r.last_seed = options.seed ? *options.seed : seeds::random(r.last_seed);
                     v.authoritative =
                         options.initial_state && v.room.preset == options.preset &&
                                 v.room.start_level == 0 && ids == std::vector<std::uint16_t>{1, 2}
                             ? *options.initial_state
                             : match::initial_state(
-                                  ids, options.seed, v.room.preset, v.room.start_level);
+                                  ids, r.last_seed, v.room.preset, v.room.start_level);
                     v.has_snapshot = true;
                     v.phase = Phase::playing;
                     lobby(r);
