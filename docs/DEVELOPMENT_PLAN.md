@@ -1,6 +1,6 @@
 # Implementation and multi-agent work plan
 
-Read [GAME_DESIGN.md](GAME_DESIGN.md) first. This is the retained milestone plan. M0 diagnostics, provisional Classic M1 and the offline Fusion/Modern M2 implementation now exist. See M1_VALIDATION.md and M2_VALIDATION.md for executed checks and remaining gates; the networking and release packages remain planned. Proposed paths below are architecture guidance, while current public headers define the implemented APIs.
+Read [GAME_DESIGN.md](GAME_DESIGN.md) first. This is the retained milestone plan. M0 diagnostics, provisional Classic M1, offline Fusion/Modern M2 and the M3 authoritative duel now exist. See M1_VALIDATION.md, M2_VALIDATION.md and M3_VALIDATION.md for executed checks and remaining gates. Larger rooms, spectators and release packages remain planned. Proposed paths below are architecture guidance, while current public headers define the implemented APIs.
 
 ## 1. Repository layout
 

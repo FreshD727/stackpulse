@@ -4,6 +4,8 @@ Modern/Fusion current implementation note: the spin-candidate v5 rules/state/rep
 
 Status: updated 2026-11-18. M1 implements the separate **SPCR provisional Classic v1** format described first. The later **SPR1 draft** remains unimplemented. The two are not compatible, and SPCR is not fulfillment of the future multiplayer/Modern replay contract.
 
+M3 online sessions do not save offline SPCR/SPMR recordings. A local input stream lacks authoritative opponent inputs, arrivals and reconnect events, so it cannot reproduce the online match. Online replay recording remains deferred until an external-event-complete match format is implemented. Offline SPCR and SPMR v5 remain unchanged.
+
 ## Implemented SPCR v1
 
 Implementation: `include/stackpulse/replay.hpp`, `src/replay/replay.cpp`, and `tools/replay_verify.cpp`. File suffix is conventionally `.spcr`; the decoder recognizes bytes, not the filename. Rules are the exact ASCII `rules` literal in `src/replay/replay.cpp`, beginning `classic-provisional-v3;`. The literal embeds tick rate, geometry, per-piece spawn orientation (T/J/L=2, I/O/S/Z=0), rotation, RNG, gravity, DAS, delays, scoring, levels, top-out, action bits and tick order. Exact equality is required; no local preset substitution is allowed. The SPCR container remains v1; its embedded rules and canonical state version are now 3. Older provisional rules/states reject as incompatible because geometry, DAS, transition thresholds and scoring differ. This provisional identity does not certify reference fidelity.

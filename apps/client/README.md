@@ -14,7 +14,7 @@ All seven pieces have distinct colors within each retro palette. Palette selecti
 - Practice: F4 advances exactly one simulation tick and pauses; F5 loads an authored four-line clear fixture. Hold Down to clear it. The pause menu also exposes frame step and the fixture.
 - Settings: select a keyboard/controller action and press its replacement; conflicting and reserved shortcuts are rejected. Escape/Back cancels capture. On the start-level row, Left/Right or controller D-pad Left/Right decreases/increases the level within 0â€“29. Enter/controller South also cycles through the levels. Left stick is optional, off by default, with 0.55 engagement / 0.35 release hysteresis.
 
-Classic has no hold, hard drop, ghost or kicks. Fusion and Modern add project-90-v1 kicks and full spin/reward rules; both enable hold; only Modern enables hard drop and a ghost. Networking remains absent. Repeated OS keydown events do not retrigger rotation or menus. Rotation uses sampled press edges; taps completed entirely between simulation boundaries are visible in the practice timeline but do not create an extra simulation action.
+Classic has no hold, hard drop, ghost or kicks. Fusion and Modern add project-90-v1 kicks and full spin/reward rules; both enable hold; only Modern enables hard drop and a ghost. Online Fusion/Modern duels use the dedicated ENet server described below. Repeated OS keydown events do not retrigger rotation or menus. Rotation uses sampled press edges; taps completed entirely between simulation boundaries are visible in the practice timeline but do not create an extra simulation action.
 
 Classic T, J and L pieces spawn and preview flipped 180 degrees from their original provisional orientation. Fusion pieces spawn with their top occupied cell at visible row zero (computed from each shape), with T/J/L flipped to match Classic in active, next and hold slots. Successful horizontal shifts (including DAS), soft-drop cells and rotations play short, distinct original synthesized effects. One-to-three-line clears play a rising sweep; four-line clears play a longer four-note ascending cue. Hard drop has a separate impact cue, and T-spin single/double/triple have distinct bass impacts, noise cracks and metallic tails with escalating layers and duration at bounded gain. An accepted first hold plays a descending storage cue; swapping an occupied hold plays a distinct rising retrieval cue. Rejected holds are silent. Automatic gravity and blocked attempts stay silent; playback uses the same simulation events. Launch with `--mute` to disable audio for the session. Audio-device failure leaves gameplay available.
 
@@ -49,3 +49,24 @@ In Fusion/Modern Practice, F7/F8/F9 select authored spin single/double/triple ca
 In Fusion/Modern Practice, F11 opens a frozen spin inspector on the current board. F12 cycles the candidate T orientation (0–3). Candidate eligibility is independent of rotation history. F11 or Escape closes it and restores the prior play/pause state. Colored cell outlines show all legal candidate poses accepted by the same core predicate used for Fusion locking: cyan CW route, pink CCW route, white both routes. A current completed spin alone is not an accepted candidate. Small squares mark local origins and crosses mark pivots. Solid cells are board blockers; live active/ghost fill is hidden. The separate ACTUAL CANDIDATE readout reports the live piece's route eligibility. SCORING READY separately reports its current grounded three-corner geometry with actual rotation history; spin scoring still requires a lock. HIDDEN counts wholly invisible accepted poses above the visible field; partly visible poses are drawn. This is a local geometry diagnostic, without a path search from spawn. Input and audio are suspended while inspecting; no simulation ticks or replay frames are added. F10 retains its garbage demo.
 
 `--spin-debug --mode fusion --smoke-frames 5 --capture out/spin-debug.bmp` opens the inspector directly on an authored single-spin board at tick zero for renderer inspection (defaults to Fusion if no non-Classic mode is chosen).
+
+
+## Online duel (M3)
+
+Start the dedicated server, then two native clients with the same preset:
+
+```powershell
+./out/build/windows-debug/Debug/stackpulse_server.exe --mode modern
+./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern
+./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern
+```
+
+The server defaults to port27877 and loopback. `--port N` selects another port. Use `--mode fusion` on all three processes for Fusion. The home menu's Multiplayer entry connects to localhost using the selected Fusion/Modern preset (Classic selects Fusion). The dedicated server is a separate process.
+
+Enter/controller South toggles ready in the lobby. Both players ready starts the countdown. Saved keyboard/controller bindings and optional stick settings apply online. Escape/Start toggles an input-release overlay; the match continues. Losing focus or removing an input device also releases its inputs. F9 starts credential-based reconnection; F10/controller Back leaves the duel. Connection, readiness, countdown and server-confirmed results appear on screen alongside the authoritative opponent board and incoming garbage meter.
+
+Only the local board is predicted. Complete authoritative snapshots restore its entire state and replay stable buffered local inputs; opponent state and results come from the server. Prediction begins with a three-tick safety lead and reserves additional ticks for measured ENet RTT. Reconciliation is silent; newly sampled local movement/rotation/drop/hold cues are deduplicated by simulation tick. Clear/result effects are withheld from speculative play. Long recovery gaps restore a complete snapshot.
+
+Online replay saving is disabled and labelled on screen: a local-input-only offline SPMR file cannot reproduce authoritative external attacks. Existing offline SPCR/SPMR recordings, practice tools and settings are unchanged.
+
+For automated native-process verification, `--online-bot --online-exit-ticks 2400 --mute` auto-readies and supplies held inputs through the same network API. Modern bots hard-drop frequently. The process exits successfully only after a reliable server result with a complete terminal snapshot, printing `AUTHORITATIVE_RESULT tick=... result=... hash=...`; reaching the tick limit or90-second timeout without a result fails. `--capture FILE.bmp` captures the final online renderer frame. This mode exercises real SDL client processes; it does not validate human input latency.

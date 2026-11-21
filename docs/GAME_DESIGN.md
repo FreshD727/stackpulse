@@ -1,6 +1,6 @@
 # Game design and technical plan
 
-Status: design baseline, 17 November 2026; updated 18 November 2026. Offline Classic/Fusion/Modern now run; fidelity, human Fusion handling, networking and release gates remain open. See M2_VALIDATION.md. Based on `../idea.md`.
+Status: design baseline, 17 November 2026; updated 20 November 2026. Offline Classic/Fusion/Modern run. The user accepted the current Fusion handling on 20 November 2026; this is a gameplay acceptance, without a hardware latency or NES fidelity claim. See M2_VALIDATION.md and M3_VALIDATION.md for executed milestone checks and remaining gates. Based on `../idea.md`.
 Current implemented Fusion handling and Modern/Fusion codec compatibility are defined by [issue-3 resolution](issues/issue-3-resolution.md), superseding conflicting design defaults below.
 
 Companion: [development work packages](DEVELOPMENT_PLAN.md).

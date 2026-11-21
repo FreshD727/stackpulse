@@ -1,4 +1,4 @@
-# Stackpulse - Classic, Fusion and Modern offline play
+# Stackpulse - offline play and authoritative duels
 
 Native C++20/SDL3 falling-block play with Classic, Fusion and Modern offline Marathon, Practice Lab, persistent input settings, replay recording/playback and an SDL-free replay verifier. **Classic-inspired provisional rules** are implemented; NES/reference fidelity is unverified. Classic rotation has no kicks; independent uniform piece draws, constant entry delays and several timing details remain provisional. See the [behavior and fidelity ledger](specs/classic-reference.md).
 
@@ -23,18 +23,29 @@ Recordings save the complete initial state and accepted tick inputs. The home me
 
 The implemented `SPCR` v1 replay has embedded provisional rules, a complete initial state, periodic/final state hashes and whole-file CRC. Embedded rules/state version 3 corrects Classic transitions, two-state I/S/Z rotations and blocked-shift DAS; older recordings reject as incompatible. The client has original synthesized movement/rotation and distinct line-clear effects (`--mute` disables audio). SPCR is separate from the unimplemented future `SPR1` replay draft; it has no network events or snapshot seeking. See [replay formats](specs/replay-v1.md). The retained diagnostic measures input bindings and timestamps; its old cursor/headless example remains a separate M0 determinism check.
 
-Visual Studio 2022 users can override the generator with `cmake --preset windows-debug -G "Visual Studio 17 2022"` in a fresh build directory. Linux uses `linux-debug` presets with Clang, Ninja and SDL's desktop development prerequisites (see CI); local Linux execution is pending. First configuration fetches exact SDL 3.2.28 and Catch2 3.8.1 source commits. Cached sources permit subsequent offline builds. No ENet/JSON/UI dependencies are fetched before their milestones.
+Visual Studio 2022 users can override the generator with `cmake --preset windows-debug -G "Visual Studio 17 2022"` in a fresh build directory. Linux uses `linux-debug` presets with Clang, Ninja and SDL's desktop development prerequisites (see CI); local Linux execution is pending. First configuration fetches exact SDL 3.2.28, Catch2 3.8.1 and ENet 1.3.18 source commits. Cached sources permit subsequent offline builds. Set `STACKPULSE_BUILD_NETWORK=OFF` to omit ENet and online play.
 
 Build the independent core, replay library and CLI tools without fetching dependencies:
 
 ```powershell
-cmake -S . -B out/core -G "Visual Studio 18 2026" -A x64 -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
+cmake -S . -B out/core -G "Visual Studio 18 2026" -A x64 -DSTACKPULSE_BUILD_CLIENT=OFF -DSTACKPULSE_BUILD_TESTS=OFF -DSTACKPULSE_BUILD_NETWORK=OFF -DFETCHCONTENT_FULLY_DISCONNECTED=ON
 cmake --build out/core --config Release
 ```
 
 On Linux use Ninja instead of the Visual Studio generator. `headless` is the equivalent Ninja preset when a C++20 compiler is already available. `STACKPULSE_FETCH_DEPENDENCIES=OFF` supports installed package configs, including a vcpkg toolchain; that alternative path remains untested. Exact tested dependency revisions and licenses are recorded in CMakeLists.txt and THIRD_PARTY_NOTICES.md.
 
-See [M1 validation and outstanding gates](docs/M1_VALIDATION.md), [historical M0 validation](docs/M0_VALIDATION.md), [design](docs/GAME_DESIGN.md), and [work plan](docs/DEVELOPMENT_PLAN.md). See [M2 validation and remaining gates](docs/M2_VALIDATION.md) for the separate full Modern/Fusion core, rewards, pending-garbage simulation, deterministic headless match harness and SPMR replay. Multiplayer/server transport, networking and release services remain future work. No ROM is accessed by the build/tests; no reference trace or physical controller/rolling fidelity approval is claimed.
+See [M1 validation and outstanding gates](docs/M1_VALIDATION.md), [historical M0 validation](docs/M0_VALIDATION.md), [design](docs/GAME_DESIGN.md), and [work plan](docs/DEVELOPMENT_PLAN.md). See [M2 validation and remaining gates](docs/M2_VALIDATION.md) for the separate full Modern/Fusion core, rewards, pending-garbage simulation, deterministic headless match harness and SPMR replay. [M3 validation](docs/M3_VALIDATION.md) covers the dedicated duel server, prediction and recovery. Rooms beyond two players, spectators and release services remain future work. No ROM is accessed by the build/tests; no reference trace or physical controller/rolling fidelity approval is claimed.
+
+For a local duel start the dedicated server, then run the client command in two separate terminals. Enter or gamepad South readies each player; both ready players start a three-second countdown. Fusion is the server default; the client preset must match.
+
+```powershell
+.\out\build\windows-debug\Debug\stackpulse_server.exe --mode fusion
+.\out\build\windows-debug\Debug\stackpulse_client.exe --connect 127.0.0.1 --mode fusion
+```
+
+Home Multiplayer connects to the default local server. Use `--port 27877` on both programs to select a port. For LAN play the server explicitly opts into a LAN bind with `--bind 192.168.1.10`; clients use that address. The default listener stays on loopback. F9 reconnects, Escape releases input while the duel continues, and F10 leaves. Restart the dedicated server for another duel. Online replay saving is disabled because an offline input-only recording cannot reproduce authoritative opponent attacks. See the [client guide](apps/client/README.md) and [implemented SPD3 protocol](src/protocol/README.md).
+
+A server build uses no SDL: configure with `STACKPULSE_BUILD_CLIENT=OFF`, or use `cmake --preset server` and `cmake --build --preset server` on a Ninja/C++20 environment. ENet remains its only external runtime dependency. The `headless` preset continues to build dependency-free offline tools.
 
 Issue-2 gameplay, compatibility and validation are recorded in [the resolution](docs/issues/issue-2-resolution.md).
 

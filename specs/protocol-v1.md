@@ -1,6 +1,6 @@
 # Protocol v1 draft
 
-Status: M0 design draft, no codec, ENet server, prediction, replay/network interoperability or security implementation. M0 headless example only demonstrates shared diagnostic core. Proposed Modern/Fusion codec2 has exact fields/encoding in `core-api-v1.md`; P06 must review it and add golden bytes before implementing snapshots. This document freezes envelope/limits for review; version1 is not advertised by M0.
+Status: the SPN1 format below remains a design draft. M3 implements a separately identified, scoped **SPD3** duel protocol over ENet 1.3.18; see [the executable protocol](../src/protocol/README.md) and [M3 validation](../docs/M3_VALIDATION.md). SPD3 does not advertise SPN1 compatibility. It uses complete current canonical `SPM1` match states containing Modern/Fusion rules v5, rather than the obsolete proposed codec2 below. The draft room, spectator, delta snapshot and replay contracts are not implied by the duel implementation.
 
 ## Encoding, channels and validation
 
