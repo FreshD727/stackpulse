@@ -51,22 +51,29 @@ In Fusion/Modern Practice, F11 opens a frozen spin inspector on the current boar
 `--spin-debug --mode fusion --smoke-frames 5 --capture out/spin-debug.bmp` opens the inspector directly on an authored single-spin board at tick zero for renderer inspection (defaults to Fusion if no non-Classic mode is chosen).
 
 
-## Online duel (M3)
+## Online rooms (M4)
 
-Start the dedicated server, then two native clients with the same preset:
+Start the dedicated server, then choose **Multiplayer / Rooms** on the home menu. The server is a separate process; localhost and port 27877 are the defaults. Select Fusion or Modern before opening Multiplayer (Classic selects Fusion). Rooms support 2–8 players plus spectators, with a named roster, connection/readiness labels and an explicit manager marker.
+
+The connection menu supports D-pad Up/Down to select rows, South to confirm, and East/Back to cancel. Keyboard Up/Down, Enter and Escape do the same. Join Room and Watch Room use the shared default room when the room code is empty, so basic localhost play and spectating require no keyboard. Create Private Room asks the server for a new room and displays its assigned code in the lobby. Left/Right toggles player/spectator, chooses localhost or the most recently used address, adjusts the port, or clears the room code. Keyboard Enter on an address, port, room-code or name field starts text editing; Backspace erases and Enter finishes. Names default to a generated Player number; labels also identify players without relying on piece colors. The last address is saved separately in `online-host.txt`.
+
+Enter/controller South toggles ready in the lobby. At least two players are needed, and every player must be connected and ready to begin the countdown. The lobby shows up to eight players, readiness and manager status, plus spectator count. A manager can press Enter/South after a server-confirmed result to return the room to its lobby for a new round without restarting the process. New round/room epochs clear prediction, held inputs, timing and audio deduplication. Spectators may join a playing room; they use server-confirmed boards throughout, never run local prediction and never upload gameplay inputs.
+
+Saved gameplay bindings and optional stick settings apply online. Escape/Start toggles an input-release overlay while the match continues. Focus loss or device removal releases inputs. F9 reconnects using the private session credential; F10/controller Back leaves the session. The Escape/Start overlay also exposes Resume, Reconnect and Leave with Up/Down and Enter/South, so recovery is available from a controller. Tab/controller right-stick click cycles your attack target, or the featured player while spectating. These shortcuts are reserved in Settings; target remapping is a later extension. The main board is local prediction for a player and the featured authoritative board for a spectator. Every other participant is visible in a compact grid of up to seven boards. Spectators can cycle the featured board for a larger view.
 
 ```powershell
 ./out/build/windows-debug/Debug/stackpulse_server.exe --mode modern
-./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern
-./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern
+./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern --name Alice
+./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern --name Bob
+./out/build/windows-debug/Debug/stackpulse_client.exe --connect 127.0.0.1 --mode modern --spectate
 ```
 
-The server defaults to port27877 and loopback. `--port N` selects another port. Use `--mode fusion` on all three processes for Fusion. The home menu's Multiplayer entry connects to localhost using the selected Fusion/Modern preset (Classic selects Fusion). The dedicated server is a separate process.
+`--port N`, `--room CODE`, `--name NAME`, `--create` and `--spectate` also configure direct connections. Omit `--room` for the default room. `--create` creates a private room; read its assigned code from the lobby and use it with `--room CODE` on other clients. Match results and opponent boards always come from the server. Complete snapshots reconcile only the local board with stable buffered inputs. Newly sampled movement/rotation/drop/hold cues are deduplicated; reconciliation is silent. Clear/result effects remain withheld because authoritative event cues are not yet exposed by the network facade.
 
-Enter/controller South toggles ready in the lobby. Both players ready starts the countdown. Saved keyboard/controller bindings and optional stick settings apply online. Escape/Start toggles an input-release overlay; the match continues. Losing focus or removing an input device also releases its inputs. F9 starts credential-based reconnection; F10/controller Back leaves the duel. Connection, readiness, countdown and server-confirmed results appear on screen alongside the authoritative opponent board and incoming garbage meter.
+Online replay saving is disabled: offline local-input SPMR cannot reproduce authoritative external attacks. Existing offline practice, recordings, sound and settings remain available.
 
-Only the local board is predicted. Complete authoritative snapshots restore its entire state and replay stable buffered local inputs; opponent state and results come from the server. Prediction begins with a three-tick safety lead and reserves additional ticks for measured ENet RTT. Reconciliation is silent; newly sampled local movement/rotation/drop/hold cues are deduplicated by simulation tick. Clear/result effects are withheld from speculative play. Long recovery gaps restore a complete snapshot.
+For native-process verification, `--online-bot --online-exit-ticks 2400 --mute` auto-readies and supplies inputs through the same API. Modern bots hard-drop frequently. The process succeeds only after a reliable server result and complete terminal snapshot, printing `AUTHORITATIVE_RESULT tick=... result=... hash=...`. The tick limit or a 90-second timeout without a result fails. Add `--spectate` for a bot that observes without inputs/readiness. `--capture FILE.bmp` exports the final online renderer frame. These checks do not measure physical controller compatibility or human input latency.
 
-Online replay saving is disabled and labelled on screen: a local-input-only offline SPMR file cannot reproduce authoritative external attacks. Existing offline SPCR/SPMR recordings, practice tools and settings are unchanged.
+`--online-capture-tick N --capture FILE.bmp` captures the first playing frame at or after server tick N once, then continues the session with the normal result/timeout exit policy. It works for both players and spectators. `--smoke-multiplayer-menu --smoke-frames 8 --capture FILE.bmp --mute` renders and captures the connection menu without connecting or changing saved preferences.
 
-For automated native-process verification, `--online-bot --online-exit-ticks 2400 --mute` auto-readies and supplies held inputs through the same network API. Modern bots hard-drop frequently. The process exits successfully only after a reliable server result with a complete terminal snapshot, printing `AUTHORITATIVE_RESULT tick=... result=... hash=...`; reaching the tick limit or90-second timeout without a result fails. `--capture FILE.bmp` captures the final online renderer frame. This mode exercises real SDL client processes; it does not validate human input latency.
+`--online-ready-delay-ms N` optionally delays bot readiness from process connection startup, allowing a full native-process roster to join before countdown. The default remains immediate readiness.

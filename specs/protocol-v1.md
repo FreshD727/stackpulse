@@ -1,6 +1,6 @@
 # Protocol v1 draft
 
-Status: the SPN1 format below remains a design draft. M3 implements a separately identified, scoped **SPD3** duel protocol over ENet 1.3.18; see [the executable protocol](../src/protocol/README.md) and [M3 validation](../docs/M3_VALIDATION.md). SPD3 does not advertise SPN1 compatibility. It uses complete current canonical `SPM1` match states containing Modern/Fusion rules v5, rather than the obsolete proposed codec2 below. The draft room, spectator, delta snapshot and replay contracts are not implied by the duel implementation.
+Status: the SPN1 format below remains a design draft. M4 implements the separately identified **SPD3 revision 2** room protocol over ENet 1.3.18; see [the executable protocol](../src/protocol/README.md) and [M4 validation](../docs/M4_VALIDATION.md). Revision 2 supports bounded rooms, spectators and rematches, and rejects revision 1 peers. SPD3 does not advertise SPN1 compatibility. It uses complete current canonical `SPM1` match states containing Modern/Fusion rules v5, rather than the obsolete proposed codec2 below. Draft delta snapshots and network replays are not implied by this implementation.
 
 ## Encoding, channels and validation
 
