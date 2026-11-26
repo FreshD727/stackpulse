@@ -33,12 +33,14 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_RENDER_DRIVER: software
+          SDL_AUDIODRIVER: dummy
         run: ctest --preset windows-debug
       - name: Test Linux
         if: runner.os == 'Linux'
         env:
           SDL_VIDEODRIVER: dummy
           SDL_RENDER_DRIVER: software
+          SDL_AUDIODRIVER: dummy
         run: ctest --preset linux-debug
       - name: Validate JSON schema and format
         shell: bash

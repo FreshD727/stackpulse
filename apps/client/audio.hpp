@@ -31,24 +31,27 @@ class ClientAudio {
         make_tone(1, 768, 150.F, 95.F);
         make_tone(2, 2016, 540.F, 860.F);
         make_tone(3, 7200, 420.F, 1050.F);
-        tones_[static_cast<std::size_t>(Cue::four_line_clear)] =
-            stackpulse::client::audio::four_line_tone();
         make_tone(static_cast<std::size_t>(Cue::hard_drop), 4800, 180.F, 48.F);
-        tones_[static_cast<std::size_t>(Cue::spin_single)] =
-            stackpulse::client::audio::spin_tone(1);
-        tones_[static_cast<std::size_t>(Cue::spin_double)] =
-            stackpulse::client::audio::spin_tone(2);
-        tones_[static_cast<std::size_t>(Cue::spin_triple)] =
-            stackpulse::client::audio::spin_tone(3);
-        tones_[static_cast<std::size_t>(Cue::hold_store)] =
-            stackpulse::client::audio::hold_tone(false);
-        tones_[static_cast<std::size_t>(Cue::hold_retrieve)] =
-            stackpulse::client::audio::hold_tone(true);
-        tones_[static_cast<std::size_t>(Cue::locked)] = stackpulse::client::audio::lock_tone();
-        tones_[static_cast<std::size_t>(Cue::garbage_warning)] =
-            stackpulse::client::audio::garbage_tone(false);
-        tones_[static_cast<std::size_t>(Cue::garbage_hit)] =
-            stackpulse::client::audio::garbage_tone(true);
+        namespace audio = stackpulse::client::audio;
+        struct GeneratedTone {
+            Cue cue;
+            Tone (*create)();
+        };
+        // Generate one PCM buffer at a time. Separate assignment expressions can
+        // reserve all nine return buffers on the small Windows Debug stack.
+        const std::array<GeneratedTone, 9> generated{{
+            {Cue::four_line_clear, audio::four_line_tone},
+            {Cue::spin_single, [] { return audio::spin_tone(1); }},
+            {Cue::spin_double, [] { return audio::spin_tone(2); }},
+            {Cue::spin_triple, [] { return audio::spin_tone(3); }},
+            {Cue::hold_store, [] { return audio::hold_tone(false); }},
+            {Cue::hold_retrieve, [] { return audio::hold_tone(true); }},
+            {Cue::locked, audio::lock_tone},
+            {Cue::garbage_warning, [] { return audio::garbage_tone(false); }},
+            {Cue::garbage_hit, [] { return audio::garbage_tone(true); }},
+        }};
+        for (const auto& tone : generated)
+            tones_[static_cast<std::size_t>(tone.cue)] = tone.create();
         if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
             unavailable();
             return;

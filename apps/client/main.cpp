@@ -2380,7 +2380,9 @@ int main(int argc, char** argv) {
                 if (mode)
                     mask = client::modern_input(sample, preset());
                 if (smoke_play && !playback)
-                    mask = mode && modern_state.tick == 0 ? modern::clockwise : game::down;
+                    mask = mode && modern_state.tick == 0
+                               ? static_cast<std::uint32_t>(modern::clockwise)
+                               : static_cast<std::uint32_t>(game::down);
                 if (playback) {
                     if (playback_index ==
                         (mode ? modern_loaded.inputs.size() : loaded.inputs.size())) {

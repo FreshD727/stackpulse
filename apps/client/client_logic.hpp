@@ -175,9 +175,11 @@ constexpr std::optional<Cue> clear_cue(unsigned lines, bool spin = false) {
 }
 
 constexpr int level_direction(int code, bool controller) {
-    if (code == (controller ? SDL_GAMEPAD_BUTTON_DPAD_LEFT : SDL_SCANCODE_LEFT))
+    if (code == (controller ? static_cast<int>(SDL_GAMEPAD_BUTTON_DPAD_LEFT)
+                            : static_cast<int>(SDL_SCANCODE_LEFT)))
         return -1;
-    if (code == (controller ? SDL_GAMEPAD_BUTTON_DPAD_RIGHT : SDL_SCANCODE_RIGHT))
+    if (code == (controller ? static_cast<int>(SDL_GAMEPAD_BUTTON_DPAD_RIGHT)
+                            : static_cast<int>(SDL_SCANCODE_RIGHT)))
         return 1;
     return 0;
 }
