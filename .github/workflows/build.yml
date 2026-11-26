@@ -3,6 +3,7 @@ on: [push, pull_request]
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
@@ -17,7 +18,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y clang ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libasound2-dev
       - name: Configure Windows
         if: runner.os == 'Windows'
-        run: cmake --preset windows-debug -G "Visual Studio 17 2022"
+        run: cmake --preset windows-debug
       - name: Configure Linux
         if: runner.os == 'Linux'
         run: cmake --preset linux-debug
