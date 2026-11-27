@@ -38,6 +38,12 @@ For local multiplayer, start the dedicated server, then choose Multiplayer in ea
 
 The server listens on loopback UDP port **27877** by default. At least two players must join and everyone must ready up to start. To host on a LAN, pass `--bind` with the server's LAN address and allow its UDP port through the host firewall; clients connect to that address. Use `--port N` on both programs to change the port. Public matchmaking and NAT traversal are not supplied.
 
+The Linux graphical client can now be built with `linux-release` and packaged as
+`stackpulse-linux-x64.tar.gz`. Extract that archive in a Linux desktop session and
+run `./play.sh`; it includes the same game, replays and multiplayer UI as Windows.
+See [Linux client setup and validation](docs/LINUX_CLIENT.md). The existing first
+GitHub release's `stackpulse-linux-x64-server.tar.gz` asset is still server-only.
+
 The separate Linux x64 server archive contains the SDL-free server and command-line tools:
 
 ```sh
@@ -65,6 +71,16 @@ Linux development uses Clang, Ninja, CMake and SDL's desktop development prerequ
 cmake --preset linux-debug
 cmake --build --preset linux-debug
 ctest --preset linux-debug
+```
+
+For the graphical Release build, install the desktop dependencies listed in the
+Linux client guide, then use the default system C++ compiler:
+
+```sh
+cmake --preset linux-release
+cmake --build --preset linux-release --parallel 3
+ctest --preset linux-release
+./out/build/linux-release/stackpulse_client
 ```
 
 The `server` preset builds the SDL-free dedicated server and tools with ENet. The `headless` preset builds dependency-free offline tools with a C++20 compiler and Ninja. `STACKPULSE_BUILD_NETWORK=OFF` omits ENet and online play. Cached dependency sources support later offline builds; `STACKPULSE_FETCH_DEPENDENCIES=OFF` supports installed package configs, but that alternative remains unverified.

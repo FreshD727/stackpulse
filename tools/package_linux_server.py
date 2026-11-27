@@ -47,7 +47,7 @@ Extract this archive and run from a terminal:
 ./stackpulse_server --bind 127.0.0.1 --port 27877 --mode fusion
 ```
 
-The server runs until Ctrl+C. Connect the Windows native client to this address
+The server runs until Ctrl+C. Connect a Windows or Linux native client to this address
 and UDP port. Each room selects its own Classic, Fusion or Modern preset. For LAN use bind to the server's LAN
 interface and allow its UDP port in the firewall. No NAT traversal or public
 matchmaking is supplied. PROTOCOL.md documents the current room protocol.

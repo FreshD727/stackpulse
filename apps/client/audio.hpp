@@ -66,6 +66,8 @@ class ClientAudio {
         }
         std::printf("Audio: synthesized movement / soft drop / hard drop / rotation / clear / spin "
                     "tiers / hold store / hold retrieval / lock / garbage warning / garbage hit\n");
+        const char* driver = SDL_GetCurrentAudioDriver();
+        std::printf("Audio backend: %s\n", driver ? driver : "unknown");
     }
 
     void set_playing(bool playing) {

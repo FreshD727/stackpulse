@@ -206,7 +206,8 @@ online_menu(SDL_Renderer* renderer,
             } else if ((e.type == SDL_EVENT_KEY_DOWN && !e.key.repeat) ||
                        e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
                 bool pad = e.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN;
-                int code = pad ? e.gbutton.button : e.key.scancode;
+                int code =
+                    pad ? static_cast<int>(e.gbutton.button) : static_cast<int>(e.key.scancode);
                 auto key = [&](int k, int b) { return code == (pad ? b : k); };
                 if (key(SDL_SCANCODE_ESCAPE, SDL_GAMEPAD_BUTTON_EAST)) {
                     if (editing) {
@@ -556,7 +557,8 @@ int run_online(SDL_Renderer* renderer,
                 const bool pad = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ||
                                  event.type == SDL_EVENT_GAMEPAD_BUTTON_UP;
                 const bool down = pad ? event.gbutton.down : event.key.down;
-                const int code = pad ? event.gbutton.button : event.key.scancode;
+                const int code = pad ? static_cast<int>(event.gbutton.button)
+                                     : static_cast<int>(event.key.scancode);
                 if ((!pad && event.key.repeat) || (!focused && !bot))
                     continue;
                 if (connection_failed || view.phase == net::Phase::connecting) {
@@ -1295,6 +1297,7 @@ int main(int argc, char** argv) {
     std::string smoke_screen;
     int smoke_replay_row = -1;
     bool smoke_replay_check = false;
+    bool list_drivers = false;
     int mode = 0; // Classic, Fusion, Modern
     unsigned fixture_rows = 1;
     bool garbage_fixture = false;
@@ -1308,7 +1311,9 @@ int main(int argc, char** argv) {
     std::string online_room, online_name = "Player";
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
-        if (arg == "--connect" && i + 1 < argc)
+        if (arg == "--list-drivers")
+            list_drivers = true;
+        else if (arg == "--connect" && i + 1 < argc)
             online_host = argv[++i];
         else if (arg == "--smoke-connect-error")
             smoke_connect_error = true;
@@ -1408,17 +1413,18 @@ int main(int argc, char** argv) {
                 smoke_frames < 1)
                 return 2;
         } else {
-            std::fprintf(stderr,
-                         "Usage: stackpulse_client [--sticks] [--mute] [--data-dir PATH] "
-                         "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
-                         "[--smoke-replay-row N] [--smoke-replay-check] "
-                         "[--smoke-settings] [--smoke-screen "
-                         "home|pause|practice-pause|settings|level|replays] "
-                         "[--spin-debug] [--capture FILE.bmp] [--smoke-connect-error] "
-                         "[--seed N] [--verify FILE] [--connect HOST --port N] "
-                         "[--spectate] [--room CODE] [--name NAME] [--create] "
-                         "[--online-bot --online-exit-ticks N] [--online-capture-tick N] "
-                         "[--online-ready-delay-ms N] [--smoke-multiplayer-menu]\n");
+            std::fprintf(
+                stderr,
+                "Usage: stackpulse_client [--list-drivers] [--sticks] [--mute] [--data-dir PATH] "
+                "[--mode classic|fusion|modern] [--smoke-frames N] [--smoke-play] "
+                "[--smoke-replay-row N] [--smoke-replay-check] "
+                "[--smoke-settings] [--smoke-screen "
+                "home|pause|practice-pause|settings|level|replays] "
+                "[--spin-debug] [--capture FILE.bmp] [--smoke-connect-error] "
+                "[--seed N] [--verify FILE] [--connect HOST --port N] "
+                "[--spectate] [--room CODE] [--name NAME] [--create] "
+                "[--online-bot --online-exit-ticks N] [--online-capture-tick N] "
+                "[--online-ready-delay-ms N] [--smoke-multiplayer-menu]\n");
             return 2;
         }
     }
@@ -1469,6 +1475,13 @@ int main(int argc, char** argv) {
                     static_cast<unsigned long long>(game::state_hash(final_state)));
         return 0;
     }
+    if (list_drivers) {
+        for (int i = 0; i < SDL_GetNumVideoDrivers(); ++i)
+            std::printf("VIDEO_DRIVER %s\n", SDL_GetVideoDriver(i));
+        for (int i = 0; i < SDL_GetNumAudioDrivers(); ++i)
+            std::printf("AUDIO_DRIVER %s\n", SDL_GetAudioDriver(i));
+        return 0;
+    }
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         std::fprintf(stderr, "%s\n", SDL_GetError());
         return 1;
@@ -1481,9 +1494,15 @@ int main(int argc, char** argv) {
                                      SDL_WINDOW_RESIZABLE,
                                      &window,
                                      &renderer)) {
+        std::fprintf(stderr, "Window/renderer: %s\n", SDL_GetError());
         SDL_Quit();
         return 1;
     }
+    const char* video_driver = SDL_GetCurrentVideoDriver();
+    const char* renderer_name = SDL_GetRendererName(renderer);
+    std::printf("Video backend: %s / renderer: %s\n",
+                video_driver ? video_driver : "unknown",
+                renderer_name ? renderer_name : "unknown");
     SDL_SetWindowMinimumSize(window, 640, 360);
     if (!client::configure_presentation(renderer)) {
         std::fprintf(stderr, "Logical presentation: %s\n", SDL_GetError());

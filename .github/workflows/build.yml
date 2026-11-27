@@ -15,7 +15,7 @@ jobs:
           python tools/format_cpp.py --check
       - name: Linux SDL build prerequisites
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y clang ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libasound2-dev
+        run: sudo apt-get update && sudo apt-get install -y clang ninja-build libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
       - name: Configure Windows
         if: runner.os == 'Windows'
         run: cmake --preset windows-debug
@@ -42,6 +42,9 @@ jobs:
           SDL_RENDER_DRIVER: software
           SDL_AUDIODRIVER: dummy
         run: ctest --preset linux-debug
+      - name: Linux client packaging smoke
+        if: runner.os == 'Linux'
+        run: python tools/package_linux_client.py --bin-dir out/build/linux-debug --sdl-license out/build/linux-debug/_deps/sdl3-src/LICENSE.txt --enet-license out/build/linux-debug/_deps/enet-src/LICENSE
       - name: Validate JSON schema and format
         shell: bash
         run: |

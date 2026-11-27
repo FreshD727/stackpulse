@@ -1,7 +1,8 @@
 # Release packages
 
-The private alpha has two distribution artifacts under `out/packages/`:
-`stackpulse-windows-x64.zip` (client, server and tools) and
+The private alpha supports three distribution artifacts under `out/packages/`:
+`stackpulse-windows-x64.zip` (client, server and tools),
+`stackpulse-linux-x64.tar.gz` (Linux graphical client, server and tools), and
 `stackpulse-linux-x64-server.tar.gz` (server and tools). Keep the matching
 `.validation.json` reports alongside them. These generated files are ignored by
 Git; upload archives as release assets rather than checking binaries into source.
@@ -9,7 +10,7 @@ The local `out/release/` directory is the latest extracted Windows package and
 can be launched without a source build. Development builds are recreated under
 `out/build/` using the presets.
 
-Before sharing a release, build and test the final source, regenerate both
+Before sharing a release, build and test the final source, regenerate the relevant
 packages, inspect their validation reports and launch the actual extracted
 artifacts. The scripts retain dependency licenses and manifests. Do not describe
 a relocated same-host smoke as a clean-machine or cross-distro compatibility test.
@@ -67,7 +68,7 @@ still the appropriate release acceptance check.
 ## Determinism matrix
 
 `stackpulse_determinism_matrix --seeds 100 --ticks 100000 --output matrix.csv`
-runs both Fusion and Modern. Trace v1 specifies xorshift32 seeded with
+runs Classic, Fusion and Modern. Trace v1 specifies xorshift32 seeded with
 `seed XOR 0xa511e9b3`, once per tick. Input masks are generated with integer
 operations in `tools/determinism_matrix.cpp`; there is no platform random
 library, wall clock, floating-point arithmetic, or unordered traversal.
@@ -100,6 +101,38 @@ to `tools/determinism_matrix.py --output-dir out/determinism`. The runner reject
 missing/duplicate seed-preset rows, unequal requested tick counts and any field
 mismatch. `comparison.json` identifies the CSV hashes and comparison scope; a
 single matrix is recorded as unpaired, never as a successful comparison.
+
+## Linux graphical client package
+
+Configure and build `linux-release` with the desktop dependencies described in
+[the Linux client guide](LINUX_CLIENT.md), then run inside Linux:
+
+```sh
+python3 tools/package_linux_client.py --bin-dir out/build/linux-release --sdl-license out/build/linux-release/_deps/sdl3-src/LICENSE.txt --enet-license out/build/linux-release/_deps/enet-src/LICENSE
+```
+
+If dependency sources were supplied through FetchContent overrides, pass their
+actual license paths instead. The default archive is
+`out/packages/stackpulse-linux-x64.tar.gz`. It contains the game, dedicated server,
+input diagnostic, replay verification tools, headless/matrix/load tools, `play.sh`,
+guides, dependency licenses, runtime notes and a SHA-256 manifest. It does not
+contain test executables, development trees or user data. File order, executable
+permissions, timestamps, ownership and gzip headers are fixed.
+
+The packager rejects missing linked libraries and a client without an X11 or
+Wayland video backend or desktop audio backend. SDL is linked statically; desktop
+drivers can load additional system libraries dynamically. Required ELF symbol
+versions, linked libraries and compiled SDL driver names are recorded in
+`RUNTIME_DEPENDENCIES.txt`; this is not a promise of compatibility with older
+distributions.
+
+The actual archive is extracted to a fresh directory whose name contains spaces.
+The launcher is run from an unrelated working directory with a stripped
+environment. All three game modes render captures using explicit dummy SDL video
+and audio drivers; the server and headless tool also start. The report distinguishes
+this automated relocation test from real desktop/display testing. CI performs
+the same packaging smoke against its Debug client build; those checks are not
+published Release binaries.
 
 ## Linux server package
 

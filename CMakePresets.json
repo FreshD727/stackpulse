@@ -4,17 +4,20 @@
     {"name":"base","hidden":true,"binaryDir":"${sourceDir}/out/build/${presetName}","cacheVariables":{"CMAKE_EXPORT_COMPILE_COMMANDS":"ON"}},
     {"name":"windows-debug","inherits":"base","generator":"Visual Studio 18 2026","architecture":"x64"},
     {"name":"linux-debug","inherits":"base","generator":"Ninja","cacheVariables":{"CMAKE_BUILD_TYPE":"Debug","CMAKE_CXX_COMPILER":"clang++"}},
+    {"name":"linux-release","inherits":"base","generator":"Ninja","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","STACKPULSE_BUILD_CLIENT":"ON","STACKPULSE_BUILD_NETWORK":"ON","STACKPULSE_BUILD_TESTS":"ON"}},
     {"name":"headless","inherits":"base","generator":"Ninja","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","STACKPULSE_BUILD_CLIENT":"OFF","STACKPULSE_BUILD_TESTS":"OFF","STACKPULSE_BUILD_NETWORK":"OFF"}},
     {"name":"server","inherits":"base","generator":"Ninja","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","STACKPULSE_BUILD_CLIENT":"OFF","STACKPULSE_BUILD_TESTS":"OFF","STACKPULSE_BUILD_NETWORK":"ON"}}
   ],
   "buildPresets": [
     {"name":"windows-debug","configurePreset":"windows-debug","configuration":"Debug"},
     {"name":"linux-debug","configurePreset":"linux-debug"},
+    {"name":"linux-release","configurePreset":"linux-release"},
     {"name":"headless","configurePreset":"headless"},
     {"name":"server","configurePreset":"server"}
   ],
   "testPresets": [
     {"name":"windows-debug","configurePreset":"windows-debug","configuration":"Debug","output":{"outputOnFailure":true}},
-    {"name":"linux-debug","configurePreset":"linux-debug","output":{"outputOnFailure":true}}
+    {"name":"linux-debug","configurePreset":"linux-debug","output":{"outputOnFailure":true}},
+    {"name":"linux-release","configurePreset":"linux-release","environment":{"SDL_VIDEO_DRIVER":"dummy","SDL_RENDER_DRIVER":"software","SDL_AUDIO_DRIVER":"dummy"},"output":{"outputOnFailure":true}}
   ]
 }
